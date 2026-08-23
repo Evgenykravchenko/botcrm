@@ -133,7 +133,7 @@ button { cursor: pointer; }
 .chat-scroll { overflow: auto; padding: 14px 18px 20px; }
 .date-divider { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; color: #999fb0; font-size: 8px; }
 .date-divider::before,.date-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
-.system-message { display: flex; justify-content: center; align-items: center; gap: 7px; margin: 9px 0; color: #969dac; font-size: 7.5px; }
+.system-message { display: flex; justify-content: center; align-items: center; gap: 7px; margin: 16px 0; color: #969dac; font-size: 7.5px; }
 .system-message span { padding: 5px 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .system-message time { font-size: 7px; }
 .message-wrap { display: flex; gap: 7px; max-width: 76%; margin: 10px 0; }
@@ -144,11 +144,14 @@ button { cursor: pointer; }
 .message-wrap p { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin: 3px 3px 0; color: #9ba2b2; font-size: 7px; }
 .message-wrap.in p { justify-content: flex-start; }
 .message-wrap p span { margin-right: auto; }
+.message-wrap.out p span { margin-right: 0; }
 .message-wrap p svg { color: var(--primary); }
 .message-receipt { display: inline-flex; align-items: center; cursor: help; }
 .message-receipt.sent svg { color: #8e96a8; }
 .message-receipt.delivered svg { color: #7b8497; }
 .message-receipt.read svg { color: var(--primary); }
+.message-receipt.inbound-received svg { color: #8e96a8; }
+.message-receipt.inbound-read svg { color: var(--primary); }
 .composer { position: relative; padding: 8px 12px 11px; border-top: 1px solid var(--line); background: var(--surface); }
 .bot-writing { position: absolute; left: 50%; top: -25px; transform: translateX(-50%); display: flex; align-items: center; gap: 5px; height: 21px; padding: 0 9px; border: 1px solid #d8d2f5; border-radius: 9px 9px 0 0; color: #6a57cc; background: #f6f3ff; font-size: 7.5px; font-weight: 700; white-space: nowrap; }
 .bot-writing.paused { color: #9f6f16; background: #fff8e7; border-color: #eee0bb; }

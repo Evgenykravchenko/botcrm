@@ -28,6 +28,13 @@ test("PostgreSQL persists an idempotent conversation across store restarts", asy
     conversationId = accepted.conversationId;
     contactId = accepted.contactId;
     assert.ok(conversationId && contactId);
+    const unreadConversation = await store.getConversation(conversationId, "ws_demo");
+    assert.equal(unreadConversation.messages.find((message) => message.eventId === eventId)?.status, "delivered");
+    assert.equal(unreadConversation.unreadCount, 1);
+    await store.markConversationRead(conversationId, "ws_demo");
+    const readConversation = await store.getConversation(conversationId, "ws_demo");
+    assert.equal(readConversation.messages.find((message) => message.eventId === eventId)?.status, "read");
+    assert.equal(readConversation.unreadCount, 0);
     assert.equal((await store.ingest({ event_id: eventId, schema_version: "1.0", occurred_at: new Date().toISOString(), workspace_id: "ws_demo", bot_id: "integration_test_bot", channel: "api", external_chat_id: externalId, external_user_id: externalId, type: "message.received", message: { text: "duplicate" } })).duplicate, true);
     const claimed = await store.setControl(conversationId, { mode: "HUMAN", expectedVersion: 1, userId: "integration" });
     assert.equal(claimed.controlVersion, 2);
