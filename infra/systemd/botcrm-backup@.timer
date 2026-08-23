@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted BotCRM backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=botcrm-backup@%i.service
+
+[Install]
+WantedBy=timers.target
