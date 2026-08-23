@@ -20,7 +20,7 @@ const warnings = [];
 const required = [
   "BOTCRM_DOMAIN", "BOTCRM_STORAGE_DOMAIN", "ACME_EMAIL", "POSTGRES_PASSWORD", "REDIS_PASSWORD",
   "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "SERVICE_TOKEN", "MASTER_ENCRYPTION_KEY",
-  "BOOTSTRAP_OWNER_EMAIL", "BOOTSTRAP_OWNER_PASSWORD", "BOT_EVENT_SIGNING_SECRET",
+  "BOOTSTRAP_WORKSPACE_ID", "SERVICE_TOKEN_WORKSPACE_ID", "BOOTSTRAP_OWNER_EMAIL", "BOOTSTRAP_OWNER_PASSWORD", "BOT_EVENT_SIGNING_SECRET",
 ];
 for (const key of required) {
   if (!env[key]) errors.push(key + " is missing");
@@ -37,6 +37,7 @@ if (env.ALLOW_INSECURE_AUTH_BYPASS !== "false") errors.push("ALLOW_INSECURE_AUTH
 if (env.TRUST_PROXY !== "true") errors.push("TRUST_PROXY must be true behind Caddy");
 if (env.BOT_EVENT_ALLOW_HTTP !== "false") errors.push("BOT_EVENT_ALLOW_HTTP must be false in production");
 if (env.DELIVERY_MODE !== "live") errors.push("DELIVERY_MODE must be live in production");
+if (env.SERVICE_TOKEN_WORKSPACE_ID !== env.BOOTSTRAP_WORKSPACE_ID) errors.push("SERVICE_TOKEN_WORKSPACE_ID must match BOOTSTRAP_WORKSPACE_ID");
 if (env.BOTCRM_DOMAIN === env.BOTCRM_STORAGE_DOMAIN) errors.push("Panel and storage domains must differ");
 if (!env.AUTOMATION_WEBHOOK_ALLOWLIST) warnings.push("AUTOMATION_WEBHOOK_ALLOWLIST is empty; external automation webhooks will be blocked");
 
