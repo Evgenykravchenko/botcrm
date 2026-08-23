@@ -1,7 +1,7 @@
 services:
   caddy:
     ports: !reset []
-    volumes: !reset
+    volumes: !override
       - ./Caddyfile.tailscale:/etc/caddy/Caddyfile:ro
 
   tailscale:
