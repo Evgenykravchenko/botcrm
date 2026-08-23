@@ -13,7 +13,7 @@ services:
       TS_SERVE_CONFIG: /config/serve.json
       TS_USERSPACE: "true"
       TS_ENABLE_HEALTH_CHECK: "true"
-      TS_LOCAL_ADDR_PORT: :9002
+      TS_LOCAL_ADDR_PORT: 0.0.0.0:9002
     volumes:
       - tailscale_state:/var/lib/tailscale
       - ./tailscale-serve:/config:ro
