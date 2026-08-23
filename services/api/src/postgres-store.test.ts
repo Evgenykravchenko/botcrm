@@ -19,6 +19,7 @@ test("PostgreSQL persists an idempotent conversation across store restarts", asy
   let conversationId: string | undefined;
   let contactId: string | undefined;
   let campaignTestConversationId: string | undefined;
+  const connectorId = randomUUID();
   try {
     const accepted = await store.ingest({ event_id: eventId, schema_version: "1.0", occurred_at: new Date().toISOString(), workspace_id: "ws_demo", bot_id: "integration_test_bot", channel: "api", external_chat_id: externalId, external_user_id: externalId, type: "message.received", message: { text: "persistent inbound" }, profile: { name: "Integration Test" }, attributes: { lead_score: 99 } });
     assert.equal(accepted.duplicate, false);
@@ -32,6 +33,11 @@ test("PostgreSQL persists an idempotent conversation across store restarts", asy
     await store.pool.query("update messages set external_id=$2,status='SENT' where id=$1", [outbound.message.id, channelMessageId]);
     const receipt = await store.ingest({ event_id: statusEventId, schema_version: "1.0", occurred_at: new Date().toISOString(), workspace_id: "ws_demo", bot_id: "integration_test_bot", channel: "api", external_chat_id: externalId, external_user_id: externalId, type: "message.status", message: { external_id: channelMessageId }, attributes: { status: "delivered" } });
     assert.equal(receipt.status, "delivered");
+    await store.pool.query(
+      `insert into connectors(id,workspace_id,bot_id,channel,encrypted_credentials,status)
+       select $1,workspace_id,bot_id,'api',$2,'CONNECTED' from conversations where id=$3`,
+      [connectorId, JSON.stringify({ test: true }), conversationId],
+    );
     const campaignTest = await store.createCampaignTestMessage("ws_demo", { contactId: contactId!, channel: "api", content: "campaign test message" });
     campaignTestConversationId = campaignTest.message.conversationId;
     assert.equal(campaignTest.message.status, "queued");
@@ -57,10 +63,12 @@ test("PostgreSQL persists an idempotent conversation across store restarts", asy
       await cleanup.query("delete from audit_events where workspace_id=$1 and entity_id=$2", [workspaceUuid, campaignTestConversationId]);
       await cleanup.query("delete from messages where conversation_id=$1", [campaignTestConversationId]);
       await cleanup.query("delete from conversations where id=$1", [campaignTestConversationId]);
-    }    if (contactId) {
+    }
+    if (contactId) {
       await cleanup.query("delete from channel_identities where contact_id=$1", [contactId]);
       await cleanup.query("delete from contacts where id=$1", [contactId]);
     }
+    await cleanup.query("delete from connectors where id=$1", [connectorId]).catch(() => undefined);
     await cleanup.query("delete from ingested_events where workspace_id=$1 and event_id=any($2::text[])", [workspaceUuid, [eventId, statusEventId]]);
     await cleanup.query("delete from bots where workspace_id=$1 and slug='integration_test_bot' and not exists(select 1 from conversations where bot_id=bots.id)", [workspaceUuid]);
     await store.close();
