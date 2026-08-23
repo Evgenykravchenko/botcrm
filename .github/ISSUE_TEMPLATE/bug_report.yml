@@ -1,0 +1,58 @@
+name: Ошибка
+description: Сообщить о воспроизводимой проблеме
+title: "[Bug]: "
+assignees: []
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Не прикладывайте токены, `.env`, дампы базы и данные клиентов. Уязвимости отправляйте приватно через Security."
+  - type: input
+    id: version
+    attributes:
+      label: Версия
+      description: Release, commit SHA или образ.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Компонент
+      options: [Web-панель, API, Worker, Telegram, VK, WhatsApp, Avito, Generic connector, Docker/развёртывание, Документация]
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Что произошло
+      description: Фактическое и ожидаемое поведение.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: "1. Открыть…\n2. Нажать…\n3. Увидеть…"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Окружение
+      description: ОС, браузер, Node/Docker и способ установки.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Безопасный фрагмент логов
+      description: Удалите токены, cookies, URL с credentials и персональные данные.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверка
+      options:
+        - label: Я удалил секреты и персональные данные.
+          required: true
+        - label: Это не отчёт об уязвимости.
+          required: true

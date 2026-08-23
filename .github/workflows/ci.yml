@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master", "codex/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: botcrm-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      DATABASE_URL: postgresql://botcrm:botcrm_dev_password@localhost:5432/botcrm
+      REDIS_URL: redis://localhost:6379
+      AUTH_REQUIRED: "true"
+      ALLOW_INSECURE_AUTH_BYPASS: "false"
+      SERVICE_TOKEN: ci-service-token-that-is-longer-than-thirty-two-characters
+      MASTER_ENCRYPTION_KEY: ci-master-key-that-is-longer-than-thirty-two-characters
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start test infrastructure
+        run: docker compose -f infra/docker-compose.yml up -d postgres redis
+
+      - name: Wait for PostgreSQL
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U botcrm -d botcrm; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f infra/docker-compose.yml logs postgres
+          exit 1
+
+      - name: Apply every database migration
+        run: node infra/scripts/migrate.mjs
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build and test web
+        run: npm test
+
+      - name: Build and test API
+        run: npm run api:build && npm run api:test
+
+      - name: Build and test worker
+        run: npm run worker:build && npm run worker:test
+
+      - name: Build TypeScript SDK
+        run: npm run build --workspace @botcrm/sdk
+
+      - name: Validate production configuration
+        shell: bash
+        run: |
+          node infra/scripts/init-production.mjs \
+            --domain crm.example.com \
+            --storage-domain media.crm.example.com \
+            --email owner@example.com \
+            --timezone Europe/Moscow >/dev/null
+          npm run prod:check
+
+      - name: Build production images
+        run: npm run prod:build
+
+      - name: Show infrastructure logs on failure
+        if: failure()
+        run: docker compose -f infra/docker-compose.yml logs --tail=200
+
+      - name: Stop test infrastructure
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v

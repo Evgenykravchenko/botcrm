@@ -1,0 +1,30 @@
+name: Предложение
+description: Предложить улучшение BotCRM
+title: "[Feature]: "
+assignees: []
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему нужно решить
+      description: Опишите рабочий сценарий, а не только желаемую кнопку.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Предлагаемое решение
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Альтернативы и ограничения
+  - type: dropdown
+    id: area
+    attributes:
+      label: Раздел
+      options: [Диалоги, Контакты, Воронки, Рассылки, Автоматизации, Интеграции, Аналитика, Безопасность, Развёртывание, SDK/API, Документация]
+    validations:
+      required: true
