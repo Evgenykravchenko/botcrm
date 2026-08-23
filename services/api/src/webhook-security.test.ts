@@ -50,8 +50,8 @@ test("channel-specific verification covers Telegram, VK and WhatsApp challenge",
   const controller = new ApiController(core as never, { enqueueBotEvent: async () => undefined } as never);
   await assert.rejects(controller.receiveWebhook("telegram", "tg", {}, {}, {}), (error: unknown) => error instanceof DomainError && error.code === "invalid_webhook_secret");
   assert.equal(await controller.receiveWebhook("vk", "vk", { type: "confirmation", secret: "vk-secret" }, {}, {}), "vk-code");
-  assert.equal((await controller.verifyWhatsApp("wa", "subscribe", "verify-me", "challenge-42")).toString(), "challenge-42");
-  await assert.rejects(controller.verifyWhatsApp("wa", "subscribe", "wrong", "challenge-42"), (error: unknown) => error instanceof DomainError && error.code === "invalid_webhook_verification");
+  assert.equal(await controller.verifyWhatsApp("wa", "subscribe", "verify-me", "123456789"), 123456789);
+  await assert.rejects(controller.verifyWhatsApp("wa", "subscribe", "wrong", "123456789"), (error: unknown) => error instanceof DomainError && error.code === "invalid_webhook_verification");
   await assert.rejects(controller.verifyWhatsApp("wa", "subscribe", "verify-me", "<script>alert(1)</script>"), (error: unknown) => error instanceof DomainError && error.code === "invalid_webhook_challenge");
 });
 test("webhook fails closed when a connector has no verification secret", async () => {

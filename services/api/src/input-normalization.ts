@@ -7,14 +7,14 @@ export function normalizeBotSlug(value: string) {
   return normalized.slice(start, end);
 }
 
-export function isSafeWebhookChallenge(value: unknown): value is string {
-  if (typeof value !== "string" || value.length < 1 || value.length > 256) return false;
+export function parseWebhookChallenge(value: unknown) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 15) return undefined;
   for (const character of value) {
     const code = character.charCodeAt(0);
     const isDigit = code >= 48 && code <= 57;
-    const isUppercase = code >= 65 && code <= 90;
-    const isLowercase = code >= 97 && code <= 122;
-    if (!isDigit && !isUppercase && !isLowercase && !"._~-".includes(character)) return false;
+    if (!isDigit) return undefined;
   }
-  return true;
+  const challenge = Number(value);
+  if (!Number.isSafeInteger(challenge) || String(challenge) !== value) return undefined;
+  return challenge;
 }
