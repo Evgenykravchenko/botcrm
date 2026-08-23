@@ -198,6 +198,13 @@ Content-Type: application/json`}/>
         ]}/>
         <div className="docs-status-row"><span>queued</span><ArrowRight/><span>sent</span><ArrowRight/><span>delivered</span><ArrowRight/><span>read</span></div>
         <p>Не каждый канал присылает delivered/read. UI показывает только реально поддерживаемый уровень. <code>failed</code> содержит безопасную причину и признак временной ошибки.</p>
+        <div className="docs-table-wrap"><table className="docs-table"><thead><tr><th>Канал</th><th>Максимальный подтверждаемый статус</th></tr></thead><tbody>
+          <tr><td>Telegram Bot API</td><td><code>sent</code> — API ботов не сообщает, прочитал ли пользователь сообщение.</td></tr>
+          <tr><td>VK Community</td><td><code>sent</code> в текущем нативном адаптере.</td></tr>
+          <tr><td>WhatsApp Cloud API</td><td><code>delivered</code> и <code>read</code> из подписанного webhook Meta.</td></tr>
+          <tr><td>Avito Messenger</td><td><code>sent</code> в текущем нативном адаптере.</td></tr>
+          <tr><td>Custom API / SDK</td><td>До <code>read</code>, если интеграция отправляет событие <code>message.status</code> с внешним ID сообщения.</td></tr>
+        </tbody></table></div>
       </section>
 
       <section className="docs-section" id="control-api">

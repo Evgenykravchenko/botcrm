@@ -13,6 +13,8 @@ test("PostgreSQL persists an idempotent conversation across store restarts", asy
   const eventId = `event_${suffix}`;
   const outboundKey = `outbound_${suffix}`;
   const statusEventId = `status_${suffix}`;
+  const readStatusEventId = `status_read_${suffix}`;
+  const lateSentStatusEventId = `status_late_sent_${suffix}`;
   const channelMessageId = `channel_${suffix}`;
   let store = new PostgresStore(databaseUrl);
   await store.init();
@@ -33,6 +35,10 @@ test("PostgreSQL persists an idempotent conversation across store restarts", asy
     await store.pool.query("update messages set external_id=$2,status='SENT' where id=$1", [outbound.message.id, channelMessageId]);
     const receipt = await store.ingest({ event_id: statusEventId, schema_version: "1.0", occurred_at: new Date().toISOString(), workspace_id: "ws_demo", bot_id: "integration_test_bot", channel: "api", external_chat_id: externalId, external_user_id: externalId, type: "message.status", message: { external_id: channelMessageId }, attributes: { status: "delivered" } });
     assert.equal(receipt.status, "delivered");
+    const readReceipt = await store.ingest({ event_id: readStatusEventId, schema_version: "1.0", occurred_at: new Date().toISOString(), workspace_id: "ws_demo", bot_id: "integration_test_bot", channel: "api", external_chat_id: externalId, external_user_id: externalId, type: "message.status", message: { external_id: channelMessageId }, attributes: { status: "read" } });
+    assert.equal(readReceipt.status, "read");
+    const lateSentReceipt = await store.ingest({ event_id: lateSentStatusEventId, schema_version: "1.0", occurred_at: new Date().toISOString(), workspace_id: "ws_demo", bot_id: "integration_test_bot", channel: "api", external_chat_id: externalId, external_user_id: externalId, type: "message.status", message: { external_id: channelMessageId }, attributes: { status: "sent" } });
+    assert.equal(lateSentReceipt.status, "read");
     await store.pool.query(
       `insert into connectors(id,workspace_id,bot_id,channel,encrypted_credentials,status)
        select $1,workspace_id,bot_id,'api',$2,'CONNECTED' from conversations where id=$3`,
@@ -48,7 +54,7 @@ test("PostgreSQL persists an idempotent conversation across store restarts", asy
     const persisted = await store.getConversation(conversationId, "ws_demo");
     assert.equal(persisted.mode, "HUMAN");
     assert.equal(persisted.messages.filter((message) => message.eventId === outboundKey).length, 1);
-    assert.equal(persisted.messages.find((message) => message.eventId === outboundKey)?.status, "delivered");
+    assert.equal(persisted.messages.find((message) => message.eventId === outboundKey)?.status, "read");
     await assert.rejects(() => store.sendMessage({ conversationId: conversationId!, actor: "bot", text: "must be blocked", idempotencyKey: `blocked_${suffix}` }), (error: unknown) => error instanceof DomainError && error.code === "bot_not_in_control");
     await store.setControl(conversationId, { mode: "BOT", expectedVersion: 2, userId: "integration" });
   } finally {
@@ -69,7 +75,7 @@ test("PostgreSQL persists an idempotent conversation across store restarts", asy
       await cleanup.query("delete from contacts where id=$1", [contactId]);
     }
     await cleanup.query("delete from connectors where id=$1", [connectorId]).catch(() => undefined);
-    await cleanup.query("delete from ingested_events where workspace_id=$1 and event_id=any($2::text[])", [workspaceUuid, [eventId, statusEventId]]);
+    await cleanup.query("delete from ingested_events where workspace_id=$1 and event_id=any($2::text[])", [workspaceUuid, [eventId, statusEventId, readStatusEventId, lateSentStatusEventId]]);
     await cleanup.query("delete from bots where workspace_id=$1 and slug='integration_test_bot' and not exists(select 1 from conversations where bot_id=bots.id)", [workspaceUuid]);
     await store.close();
   }

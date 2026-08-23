@@ -106,11 +106,20 @@ export class PostgresStore {
       if (event.type === "message.status") {
         const externalId = event.message?.external_id; const requested = String(event.attributes?.status ?? "").toUpperCase();
         const allowed = new Set(["SENT", "DELIVERED", "READ", "FAILED"]); if (!externalId || !allowed.has(requested)) throw new DomainError(400, "Message status event is incomplete", "invalid_message_status");
-        const updated = await client.query(`update messages m set status=$3::message_status,error_code=case when $3::text='FAILED' then coalesce($4,error_code) else null end,error_message=case when $3::text='FAILED' then coalesce($5,error_message) else null end
-          from conversations c where m.conversation_id=c.id and m.workspace_id=$1 and m.external_id=$2 and c.channel=$6 returning m.id,m.conversation_id`, [workspaceId, externalId, requested, event.attributes?.error_code ?? null, event.attributes?.error_message ?? null, event.channel]);
+        const updated = await client.query(`update messages m set
+            status=case
+              when $3::text='FAILED' and m.status not in ('DELIVERED','READ') then 'FAILED'::message_status
+              when $3::text='READ' then 'READ'::message_status
+              when $3::text='DELIVERED' and m.status not in ('READ','FAILED') then 'DELIVERED'::message_status
+              when $3::text='SENT' and m.status in ('QUEUED') then 'SENT'::message_status
+              else m.status
+            end,
+            error_code=case when $3::text='FAILED' and m.status not in ('DELIVERED','READ') then coalesce($4,error_code) when $3::text<>'FAILED' then null else error_code end,
+            error_message=case when $3::text='FAILED' and m.status not in ('DELIVERED','READ') then coalesce($5,error_message) when $3::text<>'FAILED' then null else error_message end
+          from conversations c where m.conversation_id=c.id and m.workspace_id=$1 and m.external_id=$2 and c.channel=$6 returning m.id,m.conversation_id,m.status`, [workspaceId, externalId, requested, event.attributes?.error_code ?? null, event.attributes?.error_message ?? null, event.channel]);
         await client.query("insert into audit_events(workspace_id,actor_type,action,entity_type,entity_id,changes) values($1,'SERVICE','message.status_changed','message',$2,$3)", [workspaceId, updated.rows[0]?.id ?? externalId, JSON.stringify({ externalId, status: requested, matched: updated.rowCount })]);
         await client.query("commit");
-        return { duplicate: false, eventId: event.event_id, workspaceId, messageId: updated.rows[0]?.id, status: requested.toLowerCase(), matched: updated.rowCount };
+        return { duplicate: false, eventId: event.event_id, workspaceId, messageId: updated.rows[0]?.id, status: String(updated.rows[0]?.status ?? requested).toLowerCase(), matched: updated.rowCount };
       }
       await this.discoverAttributeDefinitions(client, workspaceId, "BOT", event.attributes, { sourceBot: event.bot_id });
       const identity = await client.query<{ contact_id: string }>("select contact_id from channel_identities where workspace_id=$1 and channel=$2 and external_user_id=$3", [workspaceId, event.channel, event.external_user_id]);
@@ -480,7 +489,7 @@ export class PostgresStore {
     try {
       await client.query("begin");
       const bot = await client.query("insert into bots(workspace_id,slug,name,integration_mode,event_endpoint) values($1,$2,$3,$4,$5) on conflict(workspace_id,slug) do update set name=excluded.name,integration_mode=excluded.integration_mode,event_endpoint=excluded.event_endpoint returning id", [workspaceId, botSlug, botName, integrationMode, input.eventEndpoint ?? null]);
-      const capabilities = { telegram: { delivery: true, edit: true, delete: true, freeBroadcastRate: 30 }, vk: { delivery: true, read: true, edit: true }, whatsapp: { delivery: true, read: true, templates: true, serviceWindowHours: 24 }, avito: { delivery: true, read: true, requiresEntitlement: true }, api: { delivery: true, read: true, edit: true, templates: true } }[input.channel];
+      const capabilities = { telegram: { delivery: true, read: false, receiptMode: "sent_only", edit: true, delete: true, freeBroadcastRate: 30 }, vk: { delivery: true, read: false, receiptMode: "sent_only", edit: true }, whatsapp: { delivery: true, read: true, receiptMode: "webhook", templates: true, serviceWindowHours: 24 }, avito: { delivery: true, read: false, receiptMode: "sent_only", requiresEntitlement: true }, api: { delivery: true, read: true, receiptMode: "message.status", edit: true, templates: true } }[input.channel];
       const result = await client.query("insert into connectors(workspace_id,bot_id,channel,external_account_id,encrypted_credentials,capabilities,status) values($1,$2,$3,$4,$5,$6,$7) returning *", [workspaceId, bot.rows[0].id, input.channel, input.externalAccountId ?? null, JSON.stringify(encryptSecret(credentials)), JSON.stringify(capabilities), Object.keys(credentials).length ? "PENDING" : "WARNING"]);
       await client.query("insert into audit_events(workspace_id,actor_type,actor_id,action,entity_type,entity_id,changes) values($1,'USER',$2,'connector.created','connector',$3,$4)", [workspaceId, DEMO_USER_ID, result.rows[0].id, JSON.stringify({ channel: input.channel, botSlug })]);
       await client.query("commit");
