@@ -37,6 +37,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit production and build dependencies
+        run: npm audit --audit-level=high
+
       - name: Start test infrastructure
         run: docker compose -f infra/docker-compose.yml up -d postgres redis
 
