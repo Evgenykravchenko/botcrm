@@ -76,7 +76,18 @@ services:
         until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do sleep 2; done
         mc mb --ignore-existing local/botcrm-media
         mc anonymous set none local/botcrm-media
-        sed "s/BOTCRM_DOMAIN_PLACEHOLDER/$${BOTCRM_DOMAIN}/g" /config/cors.xml > /tmp/cors.xml
+        printf '%s\n' \
+          '<CORSConfiguration>' \
+          '  <CORSRule>' \
+          "    <AllowedOrigin>https://$${BOTCRM_DOMAIN}</AllowedOrigin>" \
+          '    <AllowedMethod>GET</AllowedMethod>' \
+          '    <AllowedMethod>HEAD</AllowedMethod>' \
+          '    <AllowedMethod>PUT</AllowedMethod>' \
+          '    <AllowedHeader>*</AllowedHeader>' \
+          '    <ExposeHeader>ETag</ExposeHeader>' \
+          '    <MaxAgeSeconds>3600</MaxAgeSeconds>' \
+          '  </CORSRule>' \
+          '</CORSConfiguration>' > /tmp/cors.xml
         mc cors set local/botcrm-media /tmp/cors.xml
     restart: "no"
     security_opt: ["no-new-privileges:true"]
