@@ -12,3 +12,10 @@ test("campaign template resolves custom attributes and fallbacks", () => {
   assert.equal(renderCampaignTemplate("{{lead_score}} / {{attributes.profile.plan}} / {{active}}", contact), "95 / pro / false");
   assert.equal(renderCampaignTemplate("Здравствуйте, {{first_name|клиент}} из {{city|вашего города}}!", {}), "Здравствуйте, клиент из вашего города!");
 });
+
+test("campaign template handles malformed and adversarial input in linear passes", () => {
+  assert.equal(renderCampaignTemplate("before {{ after", {}), "before {{ after");
+  assert.equal(renderCampaignTemplate("{{}}", {}), "{{}}");
+  assert.equal(renderCampaignTemplate("{{{{name}}", { displayName: "Anna" }), "{{{{name}}");
+  assert.equal(renderCampaignTemplate(`{{missing|${" ".repeat(100_000)}fallback}}`, {}), "fallback");
+});
