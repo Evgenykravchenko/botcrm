@@ -1,0 +1,22 @@
+{
+  "TCP": {
+    "443": { "HTTPS": true },
+    "8443": { "HTTPS": true }
+  },
+  "Web": {
+    "${TS_CERT_DOMAIN}:443": {
+      "Handlers": {
+        "/": { "Proxy": "http://caddy:8080" }
+      }
+    },
+    "${TS_CERT_DOMAIN}:8443": {
+      "Handlers": {
+        "/": { "Proxy": "http://minio:9000" }
+      }
+    }
+  },
+  "AllowFunnel": {
+    "${TS_CERT_DOMAIN}:443": true,
+    "${TS_CERT_DOMAIN}:8443": true
+  }
+}

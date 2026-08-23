@@ -1,0 +1,43 @@
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	encode zstd gzip
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), geolocation=(), payment=(), usb=()"
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https://{$BOTCRM_STORAGE_DOMAIN}"
+	}
+
+	@api path /api/*
+	handle @api {
+		reverse_proxy api:4100 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	@api_docs path /api-docs*
+	handle @api_docs {
+		reverse_proxy api:4100 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

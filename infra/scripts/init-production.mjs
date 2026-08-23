@@ -26,8 +26,9 @@ if (!/^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.tes
   throw new Error("Use --domain crm.example.com");
 }
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Use --email owner@example.com");
-if (!/^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(storageDomain) || storageDomain === domain) {
-  throw new Error("Storage domain must be a separate DNS name, for example media." + domain);
+const storageEndpointPattern = /^(?=.{4,259}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::(?:443|8443|10000))?$/;
+if (!storageEndpointPattern.test(storageDomain) || storageDomain === domain) {
+  throw new Error("Storage endpoint must be a separate DNS name or an allowed Funnel port, for example media." + domain + " or " + domain + ":8443");
 }
 if (!/^[A-Za-z_]+\/[A-Za-z_]+$/.test(timezone)) throw new Error("Invalid IANA timezone");
 
