@@ -150,7 +150,7 @@ export class PostgresStore {
       const conversation = conversationResult.rows[0];
       if (event.type === "message.received" || event.type === "message.sent") {
         const inbound = event.type === "message.received";
-        await client.query(`insert into messages(workspace_id,conversation_id,event_id,external_id,direction,actor_type,text_content,payload,status,occurred_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict(workspace_id,event_id) do nothing`, [workspaceId, conversation.id, event.event_id, event.message?.external_id ?? null, inbound ? "INBOUND" : "OUTBOUND", inbound ? "contact" : "bot", event.message?.text ?? "", JSON.stringify({ attachments: event.message?.attachments ?? [], raw: event.raw_payload ?? null }), inbound ? "READ" : "SENT", event.occurred_at]);
+        await client.query(`insert into messages(workspace_id,conversation_id,event_id,external_id,direction,actor_type,text_content,payload,status,occurred_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict(workspace_id,event_id) do nothing`, [workspaceId, conversation.id, event.event_id, event.message?.external_id ?? null, inbound ? "INBOUND" : "OUTBOUND", inbound ? "contact" : "bot", event.message?.text ?? "", JSON.stringify({ attachments: event.message?.attachments ?? [], raw: event.raw_payload ?? null }), inbound ? "DELIVERED" : "SENT", event.occurred_at]);
         await client.query("update conversations set unread_count=unread_count+$2,last_message_at=greatest(last_message_at,$3) where id=$1", [conversation.id, inbound ? 1 : 0, event.occurred_at]);
       }
       let outboxEventId: string | undefined;

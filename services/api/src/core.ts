@@ -194,7 +194,7 @@ export class BotCrmCore {
     const conversation = this.conversations.get(conversationId)!;
     if (event.type === "message.received" || event.type === "message.sent") {
       const inbound = event.type === "message.received";
-      const record: MessageRecord = { id: randomUUID(), eventId: event.event_id, conversationId, direction: inbound ? "inbound" : "outbound", actor: inbound ? "contact" : "bot", text: event.message?.text ?? "", status: inbound ? "read" : "sent", externalId: event.message?.external_id, attachments: [], createdAt: event.occurred_at };
+      const record: MessageRecord = { id: randomUUID(), eventId: event.event_id, conversationId, direction: inbound ? "inbound" : "outbound", actor: inbound ? "contact" : "bot", text: event.message?.text ?? "", status: inbound ? "delivered" : "sent", externalId: event.message?.external_id, attachments: [], createdAt: event.occurred_at };
       this.messages.set(conversationId, [...(this.messages.get(conversationId) ?? []), record]);
       this.conversations.set(conversationId, { ...conversation, unreadCount: inbound ? conversation.unreadCount + 1 : conversation.unreadCount, lastMessageAt: event.occurred_at });
     }
