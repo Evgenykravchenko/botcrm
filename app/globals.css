@@ -145,6 +145,10 @@ button { cursor: pointer; }
 .message-wrap.in p { justify-content: flex-start; }
 .message-wrap p span { margin-right: auto; }
 .message-wrap p svg { color: var(--primary); }
+.message-receipt { display: inline-flex; align-items: center; cursor: help; }
+.message-receipt.sent svg { color: #8e96a8; }
+.message-receipt.delivered svg { color: #7b8497; }
+.message-receipt.read svg { color: var(--primary); }
 .composer { position: relative; padding: 8px 12px 11px; border-top: 1px solid var(--line); background: var(--surface); }
 .bot-writing { position: absolute; left: 50%; top: -25px; transform: translateX(-50%); display: flex; align-items: center; gap: 5px; height: 21px; padding: 0 9px; border: 1px solid #d8d2f5; border-radius: 9px 9px 0 0; color: #6a57cc; background: #f6f3ff; font-size: 7.5px; font-weight: 700; white-space: nowrap; }
 .bot-writing.paused { color: #9f6f16; background: #fff8e7; border-color: #eee0bb; }

@@ -226,11 +226,11 @@ export class SystemController {
   @Get("connectors/capabilities")
   capabilities() {
     return [
-      { channel: "telegram", inboundWebhook: true, delivery: true, read: false, edit: true, delete: true, templates: false, freeBroadcastRate: 30 },
-      { channel: "vk", inboundWebhook: true, delivery: true, read: true, edit: true, delete: true, templates: false },
-      { channel: "whatsapp", inboundWebhook: true, delivery: true, read: true, edit: false, delete: false, templates: true, serviceWindowHours: 24 },
-      { channel: "avito", inboundWebhook: true, delivery: true, read: true, edit: false, delete: false, requiresEntitlement: true },
-      { channel: "api", inboundWebhook: true, delivery: true, read: true, edit: true, delete: true, templates: true },
+      { channel: "telegram", inboundWebhook: true, delivery: true, read: false, receiptMode: "sent_only", edit: true, delete: true, templates: false, freeBroadcastRate: 30 },
+      { channel: "vk", inboundWebhook: true, delivery: true, read: false, receiptMode: "sent_only", edit: true, delete: true, templates: false },
+      { channel: "whatsapp", inboundWebhook: true, delivery: true, read: true, receiptMode: "webhook", edit: false, delete: false, templates: true, serviceWindowHours: 24 },
+      { channel: "avito", inboundWebhook: true, delivery: true, read: false, receiptMode: "sent_only", edit: false, delete: false, requiresEntitlement: true },
+      { channel: "api", inboundWebhook: true, delivery: true, read: true, receiptMode: "message.status", edit: true, delete: true, templates: true },
     ];
   }
 }

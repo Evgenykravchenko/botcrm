@@ -16,7 +16,7 @@ type ControlMode = "BOT" | "HUMAN" | "PAUSED";
 type Channel = "telegram" | "vk" | "whatsapp" | "avito" | "api";
 type Conversation = { id: string; contactId?: string; dealId?: string; dealVersion?: number; dealPipelineId?: string; stageId?: string; assignedUserId?: string; amount?: number; controlVersion: number; attributes: Record<string, unknown>; name: string; initials: string; channel: Channel; bot: string; preview: string; time: string; unread: number; online?: boolean; avatarAvailable?: boolean; avatarVersion?: string; tags: string[]; stage: string; mode: ControlMode; phone: string; email: string; city: string };
 type ChatAttachment = ApiAttachment & { previewUrl?: string };
-type ChatMessage = { id: string; side: "in" | "out" | "system"; text: string; time: string; author?: string; status?: "queued" | "sent" | "read" | "failed"; attachments?: ChatAttachment[] };
+type ChatMessage = { id: string; side: "in" | "out" | "system"; text: string; time: string; author?: string; status?: "queued" | "sent" | "delivered" | "read" | "failed"; attachments?: ChatAttachment[] };
 type Deal = { id: string; contactId?: string; version?: number; name: string; amount: number; source: string; bot: string; age: string; tags: string[] };
 type Stage = { id: string; title: string; color: string; deals: Deal[] };
 
@@ -49,7 +49,7 @@ function initials(name: string) { return name.split(/\s+/).filter(Boolean).slice
 function shortTime(value: string) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "—" : date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }); }
 function formatBytes(value: number) { if (value < 1024) return `${value} Б`; if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} КБ`; return `${(value / 1024 / 1024).toFixed(1)} МБ`; }
 function relativeAge(value: string) { const minutes = Math.max(0, Math.round((Date.now() - new Date(value).valueOf()) / 60_000)); if (minutes < 60) return `${minutes} мин`; if (minutes < 1440) return `${Math.round(minutes / 60)} ч`; return `${Math.round(minutes / 1440)} дн`; }
-function toUiMessage(message: ApiMessage): ChatMessage { return { id: message.id, side: message.direction === "system" ? "system" : message.direction === "inbound" ? "in" : "out", text: message.text, time: shortTime(message.createdAt), author: message.actor === "operator" ? "Евгений" : message.actor === "bot" ? "Бот" : undefined, status: message.status === "delivered" ? "sent" : message.status, attachments: message.attachments ?? [] }; }
+function toUiMessage(message: ApiMessage): ChatMessage { return { id: message.id, side: message.direction === "system" ? "system" : message.direction === "inbound" ? "in" : "out", text: message.text, time: shortTime(message.createdAt), author: message.actor === "operator" ? "Евгений" : message.actor === "bot" ? "Бот" : undefined, status: message.status, attachments: message.attachments ?? [] }; }
 function toUiConversation(item: ApiConversation, deals: ApiDeal[], pipelines: ApiPipeline[]): Conversation {
   const deal = deals
     .filter((candidate) => candidate.contactId === item.contactId)
