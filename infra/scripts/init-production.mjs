@@ -41,10 +41,12 @@ function secret(bytes = 32) {
   return randomBytes(bytes).toString("base64url");
 }
 const ownerPassword = secret(20) + "!Aa1";
+const workspaceId = "00000000-0000-4000-8000-000000000001";
 const values = {
   BOTCRM_DOMAIN: domain,
   BOTCRM_STORAGE_DOMAIN: storageDomain,
   ACME_EMAIL: email,
+  BOOTSTRAP_WORKSPACE_ID: workspaceId,
   BOOTSTRAP_WORKSPACE_NAME: workspaceName,
   BOOTSTRAP_WORKSPACE_TIMEZONE: timezone,
   BOOTSTRAP_OWNER_NAME: ownerName,
@@ -54,6 +56,7 @@ const values = {
   REDIS_PASSWORD: secret(),
   MINIO_ROOT_PASSWORD: secret(),
   SERVICE_TOKEN: secret(36),
+  SERVICE_TOKEN_WORKSPACE_ID: workspaceId,
   MASTER_ENCRYPTION_KEY: secret(36),
   BOT_EVENT_SIGNING_SECRET: secret(36),
   AUTOMATION_WEBHOOK_SECRET: secret(36),
