@@ -19,7 +19,7 @@
         "@nestjs/platform-fastify": "^11.1.6",
         "@nestjs/swagger": "^11.2.0",
         "@node-rs/argon2": "^2.1.0",
-        "bullmq": "^5.58.5",
+        "bullmq": "^6.1.2",
         "dotenv": "^17.4.2",
         "otplib": "^13.4.1",
         "pg": "^8.23.0",
