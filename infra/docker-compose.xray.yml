@@ -1,0 +1,19 @@
+services:
+  api:
+    environment:
+      HTTP_PROXY: ${BOTCRM_OUTBOUND_PROXY_URL:?BOTCRM_OUTBOUND_PROXY_URL is required}
+      HTTPS_PROXY: ${BOTCRM_OUTBOUND_PROXY_URL:?BOTCRM_OUTBOUND_PROXY_URL is required}
+      NO_PROXY: localhost,127.0.0.1,::1,postgres,redis,minio,api,web
+    networks: [backend, outbound_proxy]
+
+  worker:
+    environment:
+      HTTP_PROXY: ${BOTCRM_OUTBOUND_PROXY_URL:?BOTCRM_OUTBOUND_PROXY_URL is required}
+      HTTPS_PROXY: ${BOTCRM_OUTBOUND_PROXY_URL:?BOTCRM_OUTBOUND_PROXY_URL is required}
+      NO_PROXY: localhost,127.0.0.1,::1,postgres,redis,minio,api,web
+    networks: [backend, outbound_proxy]
+
+networks:
+  outbound_proxy:
+    external: true
+    name: ${BOTCRM_OUTBOUND_PROXY_NETWORK:-botcrm_xray_proxy}
