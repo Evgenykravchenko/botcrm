@@ -53,6 +53,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      MINIO_API_CORS_ALLOW_ORIGIN: https://${BOTCRM_DOMAIN:?BOTCRM_DOMAIN is required}
     volumes: [minio_data:/data]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
@@ -67,28 +68,12 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
-      BOTCRM_DOMAIN: ${BOTCRM_DOMAIN:?BOTCRM_DOMAIN is required}
-    volumes:
-      - ./minio-cors.xml:/config/cors.xml:ro
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
         until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do sleep 2; done
         mc mb --ignore-existing local/botcrm-media
         mc anonymous set none local/botcrm-media
-        printf '%s\n' \
-          '<CORSConfiguration>' \
-          '  <CORSRule>' \
-          "    <AllowedOrigin>https://$${BOTCRM_DOMAIN}</AllowedOrigin>" \
-          '    <AllowedMethod>GET</AllowedMethod>' \
-          '    <AllowedMethod>HEAD</AllowedMethod>' \
-          '    <AllowedMethod>PUT</AllowedMethod>' \
-          '    <AllowedHeader>*</AllowedHeader>' \
-          '    <ExposeHeader>ETag</ExposeHeader>' \
-          '    <MaxAgeSeconds>3600</MaxAgeSeconds>' \
-          '  </CORSRule>' \
-          '</CORSConfiguration>' > /tmp/cors.xml
-        mc cors set local/botcrm-media /tmp/cors.xml
     restart: "no"
     security_opt: ["no-new-privileges:true"]
     networks: [backend]
