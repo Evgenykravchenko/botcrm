@@ -15,7 +15,7 @@
     "bullmq": "^5.58.5",
     "dotenv": "^17.2.2",
     "pg": "^8.16.3",
-    "undici": "^7.29.0"
+    "undici": "^8.10.0"
   },
   "devDependencies": {
     "@types/node": "^22.19.19",
