@@ -1,0 +1,98 @@
+{
+    "name": "botcrm-monorepo",
+    "version": "0.1.0",
+    "private": true,
+    "license": "AGPL-3.0-only",
+    "description": "Self-hosted CRM и единый центр управления для самописных ботов",
+    "author": "Evgeny Kravchenko",
+    "homepage": "https://github.com/Evgenykravchenko/botcrm#readme",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Evgenykravchenko/botcrm.git"
+    },
+    "bugs": {
+        "url": "https://github.com/Evgenykravchenko/botcrm/issues"
+    },
+    "keywords": [
+        "crm",
+        "bots",
+        "telegram",
+        "omnichannel",
+        "self-hosted"
+    ],
+    "engines": {
+        "node": ">=22.13.0"
+    },
+    "scripts": {
+        "dev": "vinext dev",
+        "build": "vinext build",
+        "start": "vinext start",
+        "test": "npm run build && node --test tests/rendered-html.test.mjs",
+        "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+        "db:generate": "drizzle-kit generate",
+        "db:migrate:realtime": "node --env-file=.env infra/scripts/apply-migration.mjs infra/migrations/007_realtime_notifications.sql",
+        "db:migrate:attributes": "node --env-file=.env infra/scripts/apply-migration.mjs infra/migrations/009_attribute_registry.sql",
+        "db:migrate:attribute-labels": "node --env-file=.env infra/scripts/apply-migration.mjs infra/migrations/010_russian_attribute_labels.sql",
+        "db:migrate:message-order": "node --env-file=.env infra/scripts/apply-migration.mjs infra/migrations/008_reliable_message_order.sql",
+        "api:dev": "npm run dev --workspace @botcrm/api",
+        "api:build": "npm run build --workspace @botcrm/api",
+        "api:test": "npm run test --workspace @botcrm/api",
+        "worker:dev": "npm run dev --workspace @botcrm/worker",
+        "worker:build": "npm run build --workspace @botcrm/worker",
+        "worker:test": "npm run test --workspace @botcrm/worker",
+        "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+        "infra:logs": "docker compose -f infra/docker-compose.yml logs -f --tail=100",
+        "observability:up": "docker compose -f infra/docker-compose.yml --profile observability up -d prometheus grafana",
+        "prod:init": "node infra/scripts/init-production.mjs",
+        "prod:check": "node infra/scripts/production-check.mjs",
+        "prod:check:live": "node infra/scripts/production-check.mjs --live",
+        "prod:config": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml config",
+        "prod:build": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml build",
+        "prod:up": "npm run prod:check && docker compose --env-file .env.production -f infra/docker-compose.prod.yml up -d --build",
+        "prod:up:observability": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml --profile observability up -d",
+        "prod:ps": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml ps",
+        "prod:logs": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml logs -f --tail=200",
+        "prod:stop": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml stop",
+        "prod:restart": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml restart",
+        "prod:migrate": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml run --rm migrate",
+        "prod:backup": "node infra/scripts/backup.mjs --production",
+        "prod:restore": "node infra/scripts/restore.mjs --production",
+        "backup": "node infra/scripts/backup.mjs",
+        "restore": "node infra/scripts/restore.mjs",
+        "test:all": "npm test && npm run api:test && npm run worker:test",
+        "demo:seed": "node infra/scripts/demo-seed.mjs",
+        "testbot:telegram": "node --env-file=.env --import tsx examples/telegram-test-bot/src/main.ts",
+        "testbot:telegram:check": "node --env-file=.env --import tsx examples/telegram-test-bot/src/main.ts --bot-check"
+    },
+    "dependencies": {
+        "drizzle-orm": "0.45.2",
+        "lucide-react": "^0.468.0",
+        "next": "16.3.1",
+        "react": "19.2.6",
+        "react-dom": "19.2.6",
+        "undici": "^7.29.0"
+    },
+    "devDependencies": {
+        "@cloudflare/vite-plugin": "1.37.1",
+        "@tailwindcss/postcss": "4.2.1",
+        "@types/node": "22.19.19",
+        "@types/react": "19.2.14",
+        "@types/react-dom": "19.2.3",
+        "@vitejs/plugin-react": "6.0.2",
+        "@vitejs/plugin-rsc": "0.5.26",
+        "drizzle-kit": "0.31.10",
+        "eslint": "9.39.4",
+        "eslint-config-next": "16.2.6",
+        "react-server-dom-webpack": "19.2.6",
+        "tailwindcss": "4.2.1",
+        "typescript": "5.9.3",
+        "vinext": "0.0.50",
+        "vite": "8.0.13",
+        "wrangler": "4.92.0"
+    },
+    "type": "module",
+    "workspaces": [
+        "services/*",
+        "packages/*"
+    ]
+}

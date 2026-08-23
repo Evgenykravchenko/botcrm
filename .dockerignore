@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+.vinext
+.wrangler
+.git
+.env
+.env.*
+!.env.example
+!.env.production.example
+backups
+coverage
+npm-debug.log*
+docs/images/*.tmp.png

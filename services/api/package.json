@@ -1,0 +1,35 @@
+{
+    "name": "@botcrm/api",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "tsx watch src/main.ts",
+        "build": "tsc -p tsconfig.json",
+        "start": "node dist/main.js",
+        "test": "node --import tsx --test --test-concurrency=1 src/attribute-definition.test.ts src/core.test.ts src/postgres-store.test.ts src/postgres-gateway.test.ts src/postgres-segment.test.ts src/postgres-contact.test.ts src/postgres-pipeline.test.ts src/segment.test.ts src/auth.test.ts src/media.test.ts src/postgres-media.test.ts src/automation.test.ts src/postgres-automation.test.ts src/secrets.test.ts src/webhook-security.test.ts src/contact-transfer.test.ts src/campaign-template.test.ts src/campaign-content.test.ts src/rate-limit.test.ts src/security-routes.test.ts",
+        "test:integration": "node --import tsx --test src/postgres-store.test.ts"
+    },
+    "dependencies": {
+        "@aws-sdk/client-s3": "^3.1114.0",
+        "@aws-sdk/s3-request-presigner": "^3.1114.0",
+        "@nestjs/common": "^11.1.6",
+        "@nestjs/core": "^11.1.6",
+        "@nestjs/platform-fastify": "^11.1.6",
+        "@nestjs/swagger": "^11.2.0",
+        "@node-rs/argon2": "^2.1.0",
+        "bullmq": "^5.58.5",
+        "dotenv": "^17.2.2",
+        "otplib": "^13.4.1",
+        "pg": "^8.16.3",
+        "reflect-metadata": "^0.2.2",
+        "rxjs": "^7.8.2",
+        "undici": "^7.29.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22.19.19",
+        "@types/pg": "^8.15.5",
+        "tsx": "^4.20.5",
+        "typescript": "^5.9.3"
+    }
+}
