@@ -263,6 +263,29 @@ npm run prod:backup
 - еженедельно — внешняя копия;
 - ежемесячно — тест восстановления на отдельном сервере.
 
+Для сервера с проектом в `/opt/botcrm` можно установить готовый systemd-таймер. Пароль хранится отдельно от основной production-конфигурации:
+
+```bash
+printf 'BOTCRM_BACKUP_PASSWORD=%s\n' "$(openssl rand -base64 48 | tr -d '\n')" > .backup.env
+chmod 600 .backup.env
+
+sudo install -m 0644 infra/systemd/botcrm-backup@.service /etc/systemd/system/
+sudo install -m 0644 infra/systemd/botcrm-backup@.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now "botcrm-backup@${USER}.timer"
+sudo systemctl start "botcrm-backup@${USER}.service"
+```
+
+Таймер запускается ежедневно около `03:30`, догоняет пропущенный запуск после включения сервера и удаляет только локальные архивы BotCRM старше 14 дней. Проверка:
+
+```bash
+systemctl list-timers "botcrm-backup@${USER}.timer"
+sudo systemctl status "botcrm-backup@${USER}.service"
+ls -lh backups/
+```
+
+Локальная копия на том же диске не защищает от поломки или потери сервера — регулярно переносите архивы во внешнее хранилище.
+
 ## 11. Восстановление
 
 Восстановление перезаписывает текущую БД и медиа. Сначала остановите API и worker либо выполняйте операцию в период обслуживания.
