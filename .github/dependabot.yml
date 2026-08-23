@@ -8,6 +8,18 @@ updates:
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # Major upgrades are reviewed as deliberate migrations. Keeping them out
+      # of the weekly queue prevents runtime, tooling and UI versions from
+      # drifting away from the versions validated in production.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: eslint
+        update-types: ["version-update:semver-major"]
+      - dependency-name: lucide-react
+        update-types: ["version-update:semver-major"]
+      - dependency-name: undici
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -16,3 +28,6 @@ updates:
     directory: /infra
     schedule:
       interval: monthly
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
