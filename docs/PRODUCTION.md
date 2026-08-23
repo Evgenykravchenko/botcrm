@@ -61,6 +61,53 @@
 
 Caddy сможет автоматически получить сертификат, когда DNS корректен, порты 80/443 доступны, а volume `caddy_data` сохраняется между обновлениями.
 
+### Tailscale Funnel без публичного IP
+
+Если сервер уже подключён к Tailscale или находится за NAT, используйте отдельный контейнерный узел BotCRM. Он не меняет конфигурацию Tailscale хоста и не занимает host-порты других приложений.
+
+1. Выберите уникальное имя узла, например `botcrm-rpi`.
+2. Узнайте суффикс tailnet в Tailscale Admin Console или из DNS-имени существующего устройства.
+3. Создайте конфигурацию, указав один DNS-host и порт `8443` для хранилища:
+
+```bash
+npm run prod:init -- \
+  --domain botcrm-rpi.example-tailnet.ts.net \
+  --storage-domain botcrm-rpi.example-tailnet.ts.net:8443 \
+  --email owner@example.ru \
+  --owner-name "Владелец" \
+  --workspace-name "BotCRM" \
+  --timezone Europe/Moscow
+```
+
+4. Проверьте объединённый Compose и запустите его:
+
+```bash
+export TAILSCALE_HOSTNAME=botcrm-rpi
+npm run prod:check
+npm run prod:tailscale:config
+npm run prod:tailscale:up
+```
+
+5. При первом запуске получите одноразовую ссылку без передачи auth key:
+
+```bash
+docker compose --env-file .env.production \
+  -f infra/docker-compose.prod.yml \
+  -f infra/docker-compose.tailscale.yml logs tailscale
+```
+
+Откройте ссылку `https://login.tailscale.com/a/...` и подтвердите новый узел. Конфигурация `infra/tailscale-serve/serve.json` публикует панель/API на `443`, а подписанные S3-ссылки на `8443`. Funnel принимает только HTTPS, состояние авторизации хранится в volume `botcrm_tailscale_state`. На маршрутизаторе и в UFW не требуется открывать новые входящие порты.
+
+Проверка после авторизации:
+
+```bash
+npm run prod:tailscale:ps
+curl -fsS "https://${TAILSCALE_HOSTNAME}.example-tailnet.ts.net/api/v1/health"
+curl -fsS "https://${TAILSCALE_HOSTNAME}.example-tailnet.ts.net:8443/minio/health/live"
+```
+
+Не запускайте одновременно обычный `prod:up` и Tailscale-профиль: обычный профиль публикует Caddy на host-портах `80/443`, а Funnel-профиль намеренно сбрасывает эти привязки.
+
 ## 3. Получение проекта
 
 ```bash

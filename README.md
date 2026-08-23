@@ -134,6 +134,23 @@ npm run prod:check:live
 
 Полная инструкция с firewall, обновлениями, backup, восстановлением и диагностикой: **[Production deployment](docs/PRODUCTION.md)**.
 
+### Вариант без публичного IP: Tailscale Funnel
+
+В репозитории есть отдельный Compose-профиль, который создаёт для BotCRM собственный Tailscale-узел. Панель/API публикуются на `443`, медиа — на `8443`; внутренние PostgreSQL, Redis и MinIO остаются только в сети `botcrm_backend`.
+
+```bash
+npm run prod:init -- \
+  --domain botcrm-rpi.example-tailnet.ts.net \
+  --storage-domain botcrm-rpi.example-tailnet.ts.net:8443 \
+  --email owner@example.ru \
+  --timezone Europe/Moscow
+
+TAILSCALE_HOSTNAME=botcrm-rpi npm run prod:tailscale:config
+TAILSCALE_HOSTNAME=botcrm-rpi npm run prod:tailscale:up
+```
+
+При первом запуске откройте URL авторизации из `docker compose logs tailscale`. После входа состояние сохраняется в отдельном Docker volume, а входящие порты роутера открывать не требуется. Подробности и проверка запуска описаны в [production-инструкции](docs/PRODUCTION.md#tailscale-funnel-без-публичного-ip).
+
 ## Подключение самописного бота
 
 BotCRM поддерживает два режима.
