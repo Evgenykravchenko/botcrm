@@ -66,7 +66,10 @@
         "test:all": "npm test && npm run api:test && npm run worker:test",
         "demo:seed": "node infra/scripts/demo-seed.mjs",
         "testbot:telegram": "node --env-file=.env --import tsx examples/telegram-test-bot/src/main.ts",
-        "testbot:telegram:check": "node --env-file=.env --import tsx examples/telegram-test-bot/src/main.ts --bot-check"
+        "testbot:telegram:check": "node --env-file=.env --import tsx examples/telegram-test-bot/src/main.ts --bot-check",
+        "testbot:vk": "node --env-file=.env --import tsx examples/vk-test-bot/src/main.ts",
+        "testbot:vk:check": "node --env-file=.env --import tsx examples/vk-test-bot/src/main.ts --bot-check",
+        "testbot:test": "node --import tsx --test examples/test-bot-scenarios.test.ts"
     },
     "dependencies": {
         "drizzle-orm": "0.45.2",

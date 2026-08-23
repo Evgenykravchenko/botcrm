@@ -74,6 +74,48 @@ test("PostgreSQL persists an idempotent conversation across store restarts", asy
     await store.close();
   }
 });
+
+test("VK mirror connector requires only the community access token", async () => {
+  const store = new PostgresStore(databaseUrl);
+  await store.init();
+  const suffix = randomUUID().replaceAll("-", "");
+  const slug = `vk_mirror_${suffix}`;
+  let connectorId: string | undefined;
+  let botId: string | undefined;
+  try {
+    const connector = await store.createConnector("ws_demo", {
+      botName: "VK Mirror Test",
+      botSlug: slug,
+      channel: "vk",
+      integrationMode: "MIRROR",
+      externalAccountId: "123456",
+      credentials: { accessToken: "vk-community-token-for-integration-test", apiVersion: "5.199" },
+    });
+    connectorId = connector.id;
+    botId = connector.botId;
+    assert.equal(connector.integrationMode, "MIRROR");
+    assert.deepEqual(connector.configuredFields.sort(), ["accessToken", "apiVersion"].sort());
+
+    await assert.rejects(
+      () => store.createConnector("ws_demo", {
+        botName: "VK Gateway Invalid",
+        botSlug: `vk_gateway_${suffix}`,
+        channel: "vk",
+        integrationMode: "GATEWAY",
+        credentials: { accessToken: "vk-community-token-for-integration-test" },
+      }),
+      (error: unknown) => error instanceof DomainError && error.code === "connector_secrets_required",
+    );
+  } finally {
+    if (connectorId) {
+      await store.pool.query("delete from audit_events where workspace_id=$1 and entity_id=$2", [workspaceUuid, connectorId]);
+      await store.pool.query("delete from connectors where id=$1", [connectorId]);
+    }
+    if (botId) await store.pool.query("delete from bots where id=$1", [botId]);
+    await store.close();
+  }
+});
+
 test("PostgreSQL enforces campaign pause, resume, cancellation and recipient suppression", async () => {
   const store = new PostgresStore(databaseUrl);
   await store.init();

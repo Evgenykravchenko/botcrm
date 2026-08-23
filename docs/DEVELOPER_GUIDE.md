@@ -22,6 +22,11 @@ BotCRM владеет webhook официального канала:
 
 Выбирайте Mirror, если менять транспорт существующего бота сразу нельзя. Если бот продолжает писать напрямую в Telegram/VK, BotCRM не сможет физически остановить его в режиме `HUMAN`.
 
+Готовые эталонные примеры:
+
+- [Telegram test bot](../examples/telegram-test-bot/README.md) — Bot API long polling;
+- [VK test bot](../examples/vk-test-bot/README.md) — сообщения сообщества и Bots Long Poll API.
+
 ## 2. Создайте сервисный токен
 
 В панели: «Настройки → Сервисные токены → Новый токен».
@@ -45,8 +50,9 @@ X-Service-Token: <service-token>
 - канал;
 - название и стабильный `slug` бота;
 - Gateway или Mirror;
-- endpoint вашего бота для событий BotCRM;
-- официальный токен канала и отдельный webhook secret.
+- необязательный endpoint вашего бота для событий BotCRM в Mirror-режиме;
+- официальный токен канала;
+- webhook secret и код подтверждения для Gateway, если их требует канал.
 
 После сохранения скопируйте webhook URL и выполните «Проверить».
 

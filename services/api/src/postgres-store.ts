@@ -465,9 +465,10 @@ export class PostgresStore {
     const botSlug = normalizeBotSlug(String(input.botSlug ?? botName));
     if (botName.length < 2 || !botSlug || !["telegram", "vk", "whatsapp", "avito", "api"].includes(input.channel)) throw new DomainError(400, "Bot name, slug and supported channel are required", "invalid_connector_input");
     const credentials = input.credentials ?? {};
+    const integrationMode = input.integrationMode ?? "GATEWAY";
     const requiredCredentials: Record<Channel, string[]> = {
       telegram: ["botToken", "webhookSecret"],
-      vk: ["accessToken", "confirmationSecret", "confirmationCode"],
+      vk: integrationMode === "MIRROR" ? ["accessToken"] : ["accessToken", "confirmationSecret", "confirmationCode"],
       whatsapp: ["accessToken", "phoneNumberId", "appSecret", "verifyToken"],
       avito: ["accessToken", "signingSecret"],
       api: ["outboundUrl", "signingSecret"],
@@ -478,12 +479,12 @@ export class PostgresStore {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      const bot = await client.query("insert into bots(workspace_id,slug,name,integration_mode,event_endpoint) values($1,$2,$3,$4,$5) on conflict(workspace_id,slug) do update set name=excluded.name,integration_mode=excluded.integration_mode,event_endpoint=excluded.event_endpoint returning id", [workspaceId, botSlug, botName, input.integrationMode ?? "GATEWAY", input.eventEndpoint ?? null]);
+      const bot = await client.query("insert into bots(workspace_id,slug,name,integration_mode,event_endpoint) values($1,$2,$3,$4,$5) on conflict(workspace_id,slug) do update set name=excluded.name,integration_mode=excluded.integration_mode,event_endpoint=excluded.event_endpoint returning id", [workspaceId, botSlug, botName, integrationMode, input.eventEndpoint ?? null]);
       const capabilities = { telegram: { delivery: true, edit: true, delete: true, freeBroadcastRate: 30 }, vk: { delivery: true, read: true, edit: true }, whatsapp: { delivery: true, read: true, templates: true, serviceWindowHours: 24 }, avito: { delivery: true, read: true, requiresEntitlement: true }, api: { delivery: true, read: true, edit: true, templates: true } }[input.channel];
       const result = await client.query("insert into connectors(workspace_id,bot_id,channel,external_account_id,encrypted_credentials,capabilities,status) values($1,$2,$3,$4,$5,$6,$7) returning *", [workspaceId, bot.rows[0].id, input.channel, input.externalAccountId ?? null, JSON.stringify(encryptSecret(credentials)), JSON.stringify(capabilities), Object.keys(credentials).length ? "PENDING" : "WARNING"]);
       await client.query("insert into audit_events(workspace_id,actor_type,actor_id,action,entity_type,entity_id,changes) values($1,'USER',$2,'connector.created','connector',$3,$4)", [workspaceId, DEMO_USER_ID, result.rows[0].id, JSON.stringify({ channel: input.channel, botSlug })]);
       await client.query("commit");
-      return this.mapConnector({ ...result.rows[0], bot_slug: botSlug, bot_name: botName, integration_mode: input.integrationMode ?? "GATEWAY", event_endpoint: input.eventEndpoint ?? null });
+      return this.mapConnector({ ...result.rows[0], bot_slug: botSlug, bot_name: botName, integration_mode: integrationMode, event_endpoint: input.eventEndpoint ?? null });
     } catch (error: any) { await client.query("rollback"); if (error?.code === "23505") throw new DomainError(409, "A connector for this account already exists", "connector_exists"); throw error; } finally { client.release(); }
   }
 
