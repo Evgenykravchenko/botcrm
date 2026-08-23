@@ -1,0 +1,231 @@
+name: botcrm
+
+x-app-common: &app-common
+  env_file: [../.env.production]
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  networks: [backend]
+  logging:
+    driver: json-file
+    options: { max-size: 20m, max-file: "5" }
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    environment:
+      POSTGRES_DB: botcrm
+      POSTGRES_USER: botcrm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U botcrm -d botcrm"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    logging:
+      driver: json-file
+      options: { max-size: 20m, max-file: "5" }
+
+  redis:
+    image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    logging:
+      driver: json-file
+      options: { max-size: 20m, max-file: "5" }
+
+  minio:
+    image: minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+    volumes: [minio_data:/data]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    logging:
+      driver: json-file
+      options: { max-size: 20m, max-file: "5" }
+
+  create-bucket:
+    image: minio/mc:latest@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    depends_on: [minio]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      BOTCRM_DOMAIN: ${BOTCRM_DOMAIN:?BOTCRM_DOMAIN is required}
+    volumes:
+      - ./minio-cors.xml:/config/cors.xml:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do sleep 2; done
+        mc mb --ignore-existing local/botcrm-media
+        mc anonymous set none local/botcrm-media
+        sed "s/BOTCRM_DOMAIN_PLACEHOLDER/$${BOTCRM_DOMAIN}/g" /config/cors.xml > /tmp/cors.xml
+        mc cors set local/botcrm-media /tmp/cors.xml
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+
+  migrate:
+    build: { context: .., dockerfile: infra/Dockerfile, target: migrate }
+    env_file: [../.env.production]
+    environment:
+      DATABASE_URL: postgresql://botcrm:${POSTGRES_PASSWORD}@postgres:5432/botcrm
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+
+  api:
+    <<: *app-common
+    build: { context: .., dockerfile: infra/Dockerfile, target: api }
+    environment:
+      PORT: "4100"
+      DATABASE_URL: postgresql://botcrm:${POSTGRES_PASSWORD}@postgres:5432/botcrm
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      MINIO_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: https://${BOTCRM_STORAGE_DOMAIN}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: botcrm-media
+      S3_REGION: us-east-1
+      S3_FORCE_PATH_STYLE: "true"
+      PUBLIC_API_URL: https://${BOTCRM_DOMAIN}/api/v1
+      CORS_ORIGINS: https://${BOTCRM_DOMAIN}
+      SWAGGER_PATH: api-docs
+      TRUST_PROXY: "true"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      create-bucket: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    stop_grace_period: 30s
+
+  worker:
+    <<: *app-common
+    build: { context: .., dockerfile: infra/Dockerfile, target: worker }
+    environment:
+      DATABASE_URL: postgresql://botcrm:${POSTGRES_PASSWORD}@postgres:5432/botcrm
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      MINIO_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: https://${BOTCRM_STORAGE_DOMAIN}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: botcrm-media
+      S3_REGION: us-east-1
+      S3_FORCE_PATH_STYLE: "true"
+      BOTCRM_API_URL: http://api:4100/api/v1
+      DELIVERY_MODE: live
+    depends_on:
+      api: { condition: service_healthy }
+    stop_grace_period: 60s
+
+  web:
+    <<: *app-common
+    build: { context: .., dockerfile: infra/Dockerfile, target: web }
+    environment:
+      PORT: "3000"
+      NEXT_PUBLIC_SITE_URL: https://${BOTCRM_DOMAIN}
+      NEXT_PUBLIC_API_URL: /api/v1
+      VINEXT_TRUST_PROXY: "1"
+      VINEXT_TRUSTED_HOSTS: ${BOTCRM_DOMAIN}
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/landing').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    env_file: [../.env.production]
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web: { condition: service_healthy }
+      api: { condition: service_healthy }
+      minio: { condition: service_started }
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+    logging:
+      driver: json-file
+      options: { max-size: 20m, max-file: "5" }
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: [observability]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=30d"]
+    volumes:
+      - ./observability/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    secrets: [metrics_service_token]
+    ports: ["127.0.0.1:9090:9090"]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    profiles: [observability]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: http://localhost:3002
+    ports: ["127.0.0.1:3002:3000"]
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana-datasources.yml:/etc/grafana/provisioning/datasources/botcrm.yml:ro
+    depends_on: [prometheus]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+
+secrets:
+  metrics_service_token:
+    environment: SERVICE_TOKEN
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  caddy_data:
+  caddy_config:
+  prometheus_data:
+  grafana_data:

@@ -1,0 +1,52 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+}
+
+{$BOTCRM_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), geolocation=(), payment=(), usb=()"
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https://{$BOTCRM_STORAGE_DOMAIN}"
+	}
+
+	@api path /api/*
+	handle @api {
+		reverse_proxy api:4100
+	}
+
+	@api_docs path /api-docs*
+	handle @api_docs {
+		reverse_proxy api:4100
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$BOTCRM_STORAGE_DOMAIN} {
+	encode gzip
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+	reverse_proxy minio:9000
+	log {
+		output stdout
+		format json
+	}
+}
