@@ -1,0 +1,75 @@
+name: botcrm
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: botcrm
+      POSTGRES_USER: botcrm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-botcrm_dev_password}
+    ports: ["5432:5432"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+      - ./migrations/002_runtime_repository.sql:/docker-entrypoint-initdb.d/002-runtime.sql:ro
+      - ./migrations/003_campaign_lifecycle.sql:/docker-entrypoint-initdb.d/003-campaign-lifecycle.sql:ro
+      - ./migrations/004_auth_rbac.sql:/docker-entrypoint-initdb.d/004-auth-rbac.sql:ro
+      - ./migrations/005_identity_admin.sql:/docker-entrypoint-initdb.d/005-identity-admin.sql:ro
+      - ./migrations/006_media_uploads.sql:/docker-entrypoint-initdb.d/006-media-uploads.sql:ro
+      - ./migrations/007_realtime_notifications.sql:/docker-entrypoint-initdb.d/007-realtime.sql:ro
+      - ./migrations/008_reliable_message_order.sql:/docker-entrypoint-initdb.d/008-message-order.sql:ro
+      - ./bootstrap.sql:/docker-entrypoint-initdb.d/009-bootstrap.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U botcrm -d botcrm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7.4-alpine
+    command: redis-server --appendonly yes
+    ports: ["6379:6379"]
+    volumes: ["redis_data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-botcrm}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-botcrm_dev_secret}
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio_data:/data"]
+  create-bucket:
+    image: minio/mc:latest
+    depends_on: [minio]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-botcrm}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-botcrm_dev_secret}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["until mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}; do sleep 2; done; mc mb --ignore-existing local/botcrm-media; mc anonymous set none local/botcrm-media"]
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ["observability"]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=30d"]
+    ports: ["9090:9090"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  grafana:
+    image: grafana/grafana:12.1.0
+    profiles: ["observability"]
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-replace_me}
+    ports: ["3002:3000"]
+    volumes: ["grafana_data:/var/lib/grafana"]
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
