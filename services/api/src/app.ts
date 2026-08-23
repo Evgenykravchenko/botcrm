@@ -14,6 +14,7 @@ import { CampaignButton } from "./campaign-content.js";
 import { exportContacts, parseContactImport } from "./contact-transfer.js";
 import { RealtimeService } from "./realtime.js";
 import { AttributeDefinitionInput } from "./attribute-definition.js";
+import { isSafeWebhookChallenge } from "./input-normalization.js";
 
 @Injectable()
 export class BotCrmService implements OnModuleInit, OnModuleDestroy {
@@ -332,7 +333,8 @@ export class ApiController {
 
   @Get("webhooks/whatsapp/:connectorId")
   @PublicRoute()
-  async verifyWhatsApp(@Param("connectorId") connectorId:string,@Query("hub.mode") mode:string,@Query("hub.verify_token") token:string,@Query("hub.challenge") challenge:string) { const connector=await this.core.webhookConnector(connectorId,"whatsapp"); const expected=String(connector.credentials.verifyToken??connector.credentials.verify_token??""); if(mode!=="subscribe"||!expected||token!==expected) throw new DomainError(403,"WhatsApp verification failed","invalid_webhook_verification"); return challenge; }
+  @Header("Content-Type", "text/plain; charset=utf-8")
+  async verifyWhatsApp(@Param("connectorId") connectorId:string,@Query("hub.mode") mode:string,@Query("hub.verify_token") token:string,@Query("hub.challenge") challenge:string) { const connector=await this.core.webhookConnector(connectorId,"whatsapp"); const expected=String(connector.credentials.verifyToken??connector.credentials.verify_token??""); if(mode!=="subscribe"||!expected||token!==expected) throw new DomainError(403,"WhatsApp verification failed","invalid_webhook_verification"); if(!isSafeWebhookChallenge(challenge)) throw new DomainError(400,"WhatsApp challenge contains unsupported characters","invalid_webhook_challenge"); return Buffer.from(challenge,"ascii"); }
 
   @Post("webhooks/:channel/:connectorId")
   @PublicRoute()

@@ -8,6 +8,7 @@ import { compileSegmentFilter, SegmentGroup, validateSegmentFilter } from "./seg
 import { renderCampaignTemplate } from "./campaign-template.js";
 import { CampaignButton, validateCampaignContent } from "./campaign-content.js";
 import { AttributeAuthority, AttributeDefinitionInput, humanizeAttributeKey, inferAttributeValueType, validateAttributeDefinition } from "./attribute-definition.js";
+import { normalizeBotSlug } from "./input-normalization.js";
 
 const DEMO_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001";
 const DEMO_USER_ID = "00000000-0000-4000-8000-000000000002";
@@ -461,7 +462,7 @@ export class PostgresStore {
   async createConnector(workspace: string, input: { botName: string; botSlug?: string; integrationMode?: "GATEWAY" | "MIRROR"; eventEndpoint?: string; channel: Channel; externalAccountId?: string; credentials?: Record<string, unknown> }) {
     const workspaceId = await this.workspaceId(workspace);
     const botName = String(input.botName ?? "").trim();
-    const botSlug = String(input.botSlug ?? botName).trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+    const botSlug = normalizeBotSlug(String(input.botSlug ?? botName));
     if (botName.length < 2 || !botSlug || !["telegram", "vk", "whatsapp", "avito", "api"].includes(input.channel)) throw new DomainError(400, "Bot name, slug and supported channel are required", "invalid_connector_input");
     const credentials = input.credentials ?? {};
     const requiredCredentials: Record<Channel, string[]> = {
