@@ -73,6 +73,9 @@ jobs:
       - name: Build TypeScript SDK
         run: npm run build --workspace @botcrm/sdk
 
+      - name: Test example bot scenarios
+        run: npm run testbot:test
+
       - name: Validate production configuration
         shell: bash
         run: |
