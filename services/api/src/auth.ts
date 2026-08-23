@@ -142,7 +142,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     const headerServiceToken = Array.isArray(headers["x-service-token"]) ? headers["x-service-token"][0] : headers["x-service-token"];
     const serviceToken = headerServiceToken || (process.env.SERVICE_TOKEN && bearerToken && secureEqual(bearerToken, process.env.SERVICE_TOKEN) ? bearerToken : undefined);
     if (process.env.SERVICE_TOKEN && serviceToken && secureEqual(serviceToken, process.env.SERVICE_TOKEN)) {
-      const configuredWorkspace = process.env.SERVICE_TOKEN_WORKSPACE_ID ?? "ws_demo";
+      const configuredWorkspace = process.env.SERVICE_TOKEN_WORKSPACE_ID ?? process.env.BOOTSTRAP_WORKSPACE_ID ?? "ws_demo";
       const requestedWorkspace = Array.isArray(headers["x-workspace-id"]) ? headers["x-workspace-id"][0] : headers["x-workspace-id"];
       if (requestedWorkspace && requestedWorkspace !== configuredWorkspace) throw new DomainError(403, "Service token cannot access this workspace", "service_workspace_forbidden");
       return { userId: "service", workspaceId: configuredWorkspace, email: "service@botcrm.local", displayName: "Service account", role: "SERVICE", mfaEnabled: false, service: true };

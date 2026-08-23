@@ -98,6 +98,25 @@ test("Owner manages users and revocable service tokens", async () => {
     await pool.end();
   }
 });
+test("legacy service token defaults to the bootstrap workspace", async () => {
+  const previousServiceToken = process.env.SERVICE_TOKEN;
+  const previousServiceWorkspace = process.env.SERVICE_TOKEN_WORKSPACE_ID;
+  const previousBootstrapWorkspace = process.env.BOOTSTRAP_WORKSPACE_ID;
+  const token = `legacy-${randomUUID()}-${randomUUID()}`;
+  const bootstrapWorkspace = randomUUID();
+  process.env.SERVICE_TOKEN = token;
+  delete process.env.SERVICE_TOKEN_WORKSPACE_ID;
+  process.env.BOOTSTRAP_WORKSPACE_ID = bootstrapWorkspace;
+  try {
+    const principal = await new AuthService().principal({ "x-service-token": token, "x-workspace-id": bootstrapWorkspace });
+    assert.equal(principal?.workspaceId, bootstrapWorkspace);
+    assert.equal(principal?.role, "SERVICE");
+  } finally {
+    if (previousServiceToken === undefined) delete process.env.SERVICE_TOKEN; else process.env.SERVICE_TOKEN = previousServiceToken;
+    if (previousServiceWorkspace === undefined) delete process.env.SERVICE_TOKEN_WORKSPACE_ID; else process.env.SERVICE_TOKEN_WORKSPACE_ID = previousServiceWorkspace;
+    if (previousBootstrapWorkspace === undefined) delete process.env.BOOTSTRAP_WORKSPACE_ID; else process.env.BOOTSTRAP_WORKSPACE_ID = previousBootstrapWorkspace;
+  }
+});
 test("RBAC protects owners and preserves an active workspace owner", async () => {
   const pool = new Pool({ connectionString: databaseUrl });
   const auth = new AuthService();
