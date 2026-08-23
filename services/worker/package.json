@@ -13,14 +13,14 @@
     "@aws-sdk/client-s3": "^3.1114.0",
     "@aws-sdk/s3-request-presigner": "^3.1114.0",
     "bullmq": "^5.58.5",
-    "dotenv": "^17.2.2",
-    "pg": "^8.16.3",
+    "dotenv": "^17.4.2",
+    "pg": "^8.23.0",
     "undici": "^7.29.0"
   },
   "devDependencies": {
     "@types/node": "^22.19.19",
-    "@types/pg": "^8.15.5",
-    "tsx": "^4.20.5",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.12",
     "typescript": "^5.9.3"
   }
 }
