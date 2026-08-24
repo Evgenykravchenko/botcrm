@@ -17,7 +17,7 @@ type Channel = "telegram" | "vk" | "whatsapp" | "avito" | "api";
 type Conversation = { id: string; contactId?: string; dealId?: string; dealVersion?: number; dealPipelineId?: string; stageId?: string; assignedUserId?: string; amount?: number; controlVersion: number; attributes: Record<string, unknown>; name: string; initials: string; channel: Channel; bot: string; preview: string; time: string; unread: number; online?: boolean; avatarAvailable?: boolean; avatarVersion?: string; tags: string[]; stage: string; mode: ControlMode; phone: string; email: string; city: string };
 type ChatAttachment = ApiAttachment & { previewUrl?: string };
 type ChatMessage = { id: string; side: "in" | "out" | "system"; text: string; time: string; author?: string; status?: "queued" | "sent" | "delivered" | "read" | "failed"; attachments?: ChatAttachment[] };
-type Deal = { id: string; contactId?: string; version?: number; name: string; amount: number; source: string; bot: string; age: string; tags: string[] };
+type Deal = { id: string; contactId?: string; version?: number; name: string; amount: number; source: string; bot: string; age: string; tags: string[]; contactName: string; contactDetail: string; channel: Channel; avatarAvailable?: boolean; avatarVersion?: string };
 type Stage = { id: string; title: string; color: string; deals: Deal[] };
 
 const channelMeta: Record<Channel, { label: string; short: string; className: string }> = {
@@ -62,7 +62,20 @@ function toUiConversation(item: ApiConversation, deals: ApiDeal[], pipelines: Ap
 }
 function toUiStages(deals: ApiDeal[], conversations: ApiConversation[], pipeline?: ApiPipeline): Stage[] {
   const configured = pipeline?.stages.map((stage) => ({ id: stage.slug, title: stage.name, color: stage.color, deals: [] as Deal[] })) ?? [];
-  return configured.map((stage) => ({ ...stage, deals: deals.filter((deal) => deal.stageId === stage.id).map((deal) => { const conversation = conversations.find((item) => item.contactId === deal.contactId); const channel = conversation?.channel || deal.contact?.identities?.[0]?.channel || "api"; const tags = Array.isArray(deal.contact?.attributes?.tags) ? deal.contact.attributes.tags.filter((tag): tag is string => typeof tag === "string") : []; return { id: deal.id, contactId: deal.contactId, version: deal.version, name: deal.title, amount: deal.amount, source: channelMeta[channel].short, bot: conversation ? displayBot(conversation.botId) : "CRM", age: relativeAge(deal.updatedAt), tags }; }) }));
+  return configured.map((stage) => ({ ...stage, deals: deals.filter((deal) => deal.stageId === stage.id).map((deal) => {
+    const conversation = conversations.find((item) => item.contactId === deal.contactId);
+    const contact = deal.contact ?? conversation?.contact;
+    const channel = conversation?.channel || contact?.identities?.[0]?.channel || "api";
+    const identity = contact?.identities.find((item) => item.channel === channel) ?? contact?.identities[0];
+    const username = ["telegram_username", "vk_username", "username"]
+      .map((key) => contact?.attributes?.[key])
+      .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+    const contactDetail = username
+      ? (username.startsWith("@") ? username : `@${username}`)
+      : identity ? `${channelMeta[identity.channel].short} ID ${identity.externalUserId}` : "Только CRM";
+    const tags = Array.isArray(contact?.attributes?.tags) ? contact.attributes.tags.filter((tag): tag is string => typeof tag === "string") : [];
+    return { id: deal.id, contactId: deal.contactId, version: deal.version, name: deal.title, amount: deal.amount, source: channelMeta[channel].short, bot: conversation ? displayBot(conversation.botId) : "CRM", age: relativeAge(deal.updatedAt), tags, contactName: contact?.displayName || "Контакт недоступен", contactDetail, channel, avatarAvailable: contact?.avatarAvailable, avatarVersion: contact?.updatedAt };
+  }) }));
 }
 type CampaignCardItem = { id?: string; createdAt: string; rawStatus: ApiCampaign["status"]; name: string; channel: string; segment: string; audience: string; delivered: string; replies: string; status: string; tone: string; sentCount?: number; deliveredCount?: number; readCount?: number; failedCount?: number };
 function toCampaignCard(item: ApiCampaign): CampaignCardItem { const state = { draft: ["Черновик", "draft"], scheduled: [item.scheduledAt ? `${new Intl.DateTimeFormat("ru-RU", { timeZone: item.timeZone ?? "Europe/Moscow", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(item.scheduledAt))} · ${campaignTimeZoneLabel(item.timeZone ?? "Europe/Moscow")}` : "Запланирована", "scheduled"], running: ["Идёт", "running"], paused: ["На паузе", "paused"], completed: ["Завершена", "done"], cancelled: ["Отменена", "cancelled"] }[item.status]; const sent = item.sent ?? 0; const delivered = item.delivered ?? 0; return { id: item.id, createdAt: item.createdAt, rawStatus: item.status, name: item.name, channel: channelMeta[item.channel].label, segment: item.segmentName || "Все подходящие контакты", audience: new Intl.NumberFormat("ru-RU").format(item.eligible ?? item.audience), delivered: sent ? `${(delivered / sent * 100).toFixed(1)}%` : "—", replies: item.read === undefined ? "—" : String(item.read), status: state[0], tone: state[1], sentCount: sent, deliveredCount: delivered, readCount: item.read ?? 0, failedCount: item.failed ?? 0 }; }
@@ -679,7 +692,7 @@ function PipelineView({ canConfigure, stages, pipelines, selectedPipelineId, onS
   const [tag, setTag] = useState("");
   const normalized = query.trim().toLowerCase();
   const visibleStages = stages.map((stage) => ({ ...stage, deals: stage.deals.filter((deal) => {
-    const queryMatch = !normalized || `${deal.name} ${deal.bot} ${deal.tags.join(" ")}`.toLowerCase().includes(normalized);
+    const queryMatch = !normalized || `${deal.name} ${deal.contactName} ${deal.contactDetail} ${deal.bot} ${deal.tags.join(" ")}`.toLowerCase().includes(normalized);
     const amountMatch = !minAmount || deal.amount >= Number(minAmount);
     const tagMatch = !tag.trim() || deal.tags.some((value) => value.toLowerCase().includes(tag.trim().toLowerCase()));
     return queryMatch && amountMatch && tagMatch;
@@ -689,7 +702,16 @@ function PipelineView({ canConfigure, stages, pipelines, selectedPipelineId, onS
   return <div className="pipeline-page">
     <div className="pipeline-toolbar"><AppSelect className="pipeline-select" compact value={selectedPipelineId} options={pipelines.map((pipeline)=>({value:pipeline.id,label:pipeline.name,icon:<Columns3 size={15}/>}))} onValueChange={onSelectPipeline} ariaLabel="Выберите воронку" menuWidth={220}/><div className="pipeline-summary"><span>{totalDeals} сделок</span><b>{formatMoney(total)}</b></div><span className="toolbar-spacer" /><label className="pipeline-search"><Search size={16}/><input value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="Поиск сделки"/></label><button className={`button secondary ${filtersOpen?"active":""}`} onClick={()=>setFiltersOpen(!filtersOpen)}><SlidersHorizontal size={16} />Фильтры</button><button className="button primary" onClick={()=>onCreate()}><Plus size={17} />Сделка</button></div>
     {filtersOpen&&<div className="pipeline-filters" role="dialog" aria-label="Фильтры воронки"><header><b>Фильтры сделок</b><button className="icon-button" aria-label="Закрыть фильтры" onClick={()=>setFiltersOpen(false)}><X size={15}/></button></header><div><label><span>Минимальная сумма</span><input type="number" min="0" value={minAmount} onChange={(event)=>setMinAmount(event.target.value)}/></label><label><span>Тег</span><input value={tag} onChange={(event)=>setTag(event.target.value)} placeholder="VIP"/></label></div><footer><button className="button secondary" onClick={()=>{setMinAmount("");setTag("");}}>Сбросить</button><button className="button primary" onClick={()=>setFiltersOpen(false)}>Применить</button></footer></div>}
-    <div className="kanban-scroll">{visibleStages.map((stage)=><section className={`kanban-column ${dragged?"drag-active":""}`} key={stage.id} onDragOver={(event)=>event.preventDefault()} onDrop={()=>moveDeal(stage.id)}><header><span><i style={{background:stage.color}}/>{stage.title}<em>{stage.deals.length}</em></span>{canConfigure && <button aria-label={`Настроить стадию ${stage.title}`} onClick={onConfigure}><MoreHorizontal size={17}/></button>}</header><div className="column-total">{formatMoney(stage.deals.reduce((sum,deal)=>sum+deal.amount,0))}</div><div className="deal-list">{stage.deals.map((deal)=><article className="deal-card" key={deal.id} draggable onDragStart={()=>setDragged({dealId:deal.id,stageId:stage.id})} onDragEnd={()=>setDragged(null)} onClick={()=>onEdit(deal)} role="button" tabIndex={0} onKeyDown={(event)=>{if(event.key==="Enter")onEdit(deal);}}><div className="deal-card-top"><GripVertical size={15}/><span className={`source-dot source-${deal.source.toLowerCase()}`}>{deal.source}</span><time>{deal.age}</time></div><h3>{deal.name}</h3><strong>{formatMoney(deal.amount)}</strong><p><Bot size={13}/>{deal.bot}</p><div>{deal.tags.map((value)=><span key={value}>{value}</span>)}</div></article>)}<button className="add-card" onClick={()=>onCreate(stage.id)}><Plus size={15}/>Добавить сделку</button></div></section>)}</div>
+    <div className="kanban-scroll">{visibleStages.map((stage)=><section className={`kanban-column ${dragged?"drag-active":""}`} key={stage.id} onDragOver={(event)=>event.preventDefault()} onDrop={()=>moveDeal(stage.id)}><header><span><i style={{background:stage.color}}/>{stage.title}<em>{stage.deals.length}</em></span>{canConfigure && <button aria-label={`Настроить стадию ${stage.title}`} onClick={onConfigure}><MoreHorizontal size={17}/></button>}</header><div className="column-total">{formatMoney(stage.deals.reduce((sum,deal)=>sum+deal.amount,0))}</div><div className="deal-list">{stage.deals.map((deal)=><article className="deal-card" key={deal.id} draggable onDragStart={()=>setDragged({dealId:deal.id,stageId:stage.id})} onDragEnd={()=>setDragged(null)} onClick={()=>onEdit(deal)} role="button" tabIndex={0} onKeyDown={(event)=>{if(event.key==="Enter")onEdit(deal);}}>
+  <div className="deal-card-top"><GripVertical size={15}/><span className="deal-card-kind">Сделка</span><time>{deal.age}</time></div>
+  <div className="deal-card-contact">
+    <ContactAvatar contactId={deal.contactId} channel={deal.channel} avatarAvailable={deal.avatarAvailable} avatarVersion={deal.avatarVersion} initials={initials(deal.contactName)} seed={deal.contactId || deal.id} size="sm" />
+    <span><small>Клиент</small><b>{deal.contactName}</b><em><ChannelBadge channel={deal.channel} compact />{deal.contactDetail}</em></span>
+  </div>
+  <div className="deal-card-main"><small>Сделка</small><h3>{deal.name}</h3><strong>{formatMoney(deal.amount)}</strong></div>
+  <p><Bot size={13}/><span>{deal.bot}</span></p>
+  <div>{deal.tags.map((value)=><span key={value}>{value}</span>)}</div>
+</article>)}<button className="add-card" onClick={()=>onCreate(stage.id)}><Plus size={15}/>Добавить сделку</button></div></section>)}</div>
   </div>;
 }
 function PipelineSettingsModal({ pipeline, close, changed, notify }: { pipeline?: ApiPipeline; close: () => void; changed: () => Promise<void>; notify: (text: string) => void }) {
