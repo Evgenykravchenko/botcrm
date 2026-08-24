@@ -701,14 +701,120 @@ function PipelineSettingsModal({ pipeline, close, changed, notify }: { pipeline?
   return <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={(event) => event.target === event.currentTarget && close()}><section className="modal pipeline-modal"><header><div><span className="eyebrow">Настройка канбана</span><h2>{pipeline?.name||"Воронка"}</h2></div><button className="icon-button" onClick={close}><X size={19}/></button></header><div className="modal-body"><div className="stage-settings">{pipeline?.stages.map((stage,index)=><article key={stage.id}><input type="color" value={stage.color} onChange={async(event)=>{await botcrmApi.updateStage(stage.id,{color:event.target.value});await changed();}}/><input defaultValue={stage.name} onBlur={(event)=>event.target.value!==stage.name&&void rename(stage.id,event.target.value)}/><span>{stage.dealCount} сделок</span><select value={stage.terminalKind??""} onChange={async(event)=>{await botcrmApi.updateStage(stage.id,{terminalKind:(event.target.value||null) as "WON"|"LOST"|null});await changed();}}><option value="">Обычная</option><option value="WON">Успешная</option><option value="LOST">Проигранная</option></select><button className="icon-button stage-move" disabled={busy||index===0} title="Выше" onClick={async()=>{await botcrmApi.updateStage(stage.id,{position:index-1});await changed();}}>↑</button><button className="icon-button stage-move" disabled={busy||index===(pipeline?.stages.length??0)-1} title="Ниже" onClick={async()=>{await botcrmApi.updateStage(stage.id,{position:index+1});await changed();}}>↓</button><button className="icon-button" disabled={busy||stage.dealCount>0} onClick={()=>void remove(stage.id)} title={stage.dealCount>0?"Сначала переместите сделки":"Удалить"}><X size={15}/></button></article>)}</div><div className="inline-create"><input value={newStage} onChange={(event)=>setNewStage(event.target.value)} placeholder="Название новой стадии"/><button onClick={()=>void addStage()} disabled={busy||!newStage.trim()}><Plus size={15}/></button></div><div className="pipeline-create-row"><b>Новая воронка</b><div className="inline-create"><input value={newPipeline} onChange={(event)=>setNewPipeline(event.target.value)} placeholder="Например: Повторные продажи"/><button onClick={()=>void addPipeline()} disabled={busy||!newPipeline.trim()}><Plus size={15}/></button></div></div>{error&&<div className="form-error"><AlertTriangle size={15}/>{error}</div>}</div><footer><button className="button primary" onClick={close}>Готово</button></footer></section></div>;
 }
 function DealModal({ contacts, pipeline, deal, initialStageId, close, saved }: { contacts: ApiContact[]; pipeline?: ApiPipeline; deal?: Deal; initialStageId?: string; close: () => void; saved: (editing: boolean) => Promise<void> }) {
-  const [contactId,setContactId]=useState(deal?.contactId??contacts[0]?.id??"");
-  const [stageId,setStageId]=useState(initialStageId??pipeline?.stages[0]?.slug??"");
-  const [title,setTitle]=useState(deal?.name??"");
-  const [amount,setAmount]=useState(deal?String(deal.amount):"");
-  const [busy,setBusy]=useState(false); const [error,setError]=useState("");
-  async function submit(event:FormEvent){event.preventDefault();setBusy(true);setError("");try{if(deal){await botcrmApi.updateDeal(deal.id,{title,amount:Number(amount)||0,expectedVersion:deal.version??1});}else{await botcrmApi.createDeal({contactId,pipelineId:pipeline?.id,stageId,title,amount:Number(amount)||0});}await saved(Boolean(deal));}catch(reason){setError(reason instanceof Error?reason.message:"Не удалось сохранить сделку");}finally{setBusy(false);}}
-  return <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={(event) => event.target === event.currentTarget && close()}><form className="modal deal-modal" onSubmit={submit}><header><div><span className="eyebrow">Карточка канбана</span><h2>{deal?"Редактировать сделку":"Создать сделку"}</h2></div><button type="button" className="icon-button" onClick={close}><X size={19}/></button></header><div className="modal-body"><label className="form-field"><span>Контакт</span><select required disabled={Boolean(deal)} className="select-field" value={contactId} onChange={(event)=>setContactId(event.target.value)}>{contacts.map((contact)=><option value={contact.id} key={contact.id}>{contact.displayName}</option>)}</select></label><label className="form-field"><span>Название сделки</span><input required minLength={2} value={title} onChange={(event)=>setTitle(event.target.value)} placeholder="Например: Покупка тарифа Pro"/></label><div className="form-split">{!deal&&<label className="form-field"><span>Стадия</span><select className="select-field" value={stageId} onChange={(event)=>setStageId(event.target.value)}>{pipeline?.stages.map((stage)=><option value={stage.slug} key={stage.id}>{stage.name}</option>)}</select></label>}<label className="form-field"><span>Сумма, ₽</span><input type="number" min="0" value={amount} onChange={(event)=>setAmount(event.target.value)}/></label></div>{error&&<div className="form-error"><AlertTriangle size={15}/>{error}</div>}</div><footer><button type="button" className="button secondary" onClick={close}>Отмена</button><button className="button primary" disabled={busy||!contactId||!title.trim()}>{busy&&<RefreshCw className="spin" size={15}/>}Сохранить</button></footer></form></div>;
+  const [contactId, setContactId] = useState(deal?.contactId ?? contacts[0]?.id ?? "");
+  const [stageId, setStageId] = useState(initialStageId ?? pipeline?.stages[0]?.slug ?? "");
+  const [title, setTitle] = useState(deal?.name ?? "");
+  const [amount, setAmount] = useState(deal ? String(deal.amount) : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const contactOptions = useMemo<AppSelectOption[]>(() => contacts.map((contact) => {
+    const primaryIdentity = contact.identities[0];
+    const channel = (primaryIdentity?.channel ?? "api") as Channel;
+    const username = ["telegram_username", "vk_username", "username"]
+      .map((key) => contact.attributes[key])
+      .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+    const identitySummary = contact.identities
+      .map((identity) => `${channelMeta[identity.channel as Channel].short} ID ${identity.externalUserId}`)
+      .join(" · ");
+    const detail = [
+      username ? (username.startsWith("@") ? username : `@${username}`) : "",
+      contact.phone,
+      contact.email,
+      identitySummary || `CRM ID ${contact.id.slice(0, 8)}`,
+    ].filter(Boolean).join(" · ");
+
+    return {
+      value: contact.id,
+      label: contact.displayName,
+      detail,
+      icon: (
+        <span className="deal-contact-avatar">
+          <ContactAvatar
+            contactId={contact.id}
+            channel={channel}
+            avatarAvailable={contact.avatarAvailable}
+            avatarVersion={contact.updatedAt}
+            initials={initials(contact.displayName)}
+            seed={contact.id}
+            size="sm"
+          />
+          <ChannelBadge channel={channel} compact />
+        </span>
+      ),
+    };
+  }), [contacts]);
+
+  const stageOptions = useMemo<AppSelectOption[]>(() => (pipeline?.stages ?? []).map((stage) => ({
+    value: stage.slug,
+    label: stage.name,
+    detail: "Этап воронки",
+    color: stage.color,
+  })), [pipeline]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      if (deal) {
+        await botcrmApi.updateDeal(deal.id, { title, amount: Number(amount) || 0, expectedVersion: deal.version ?? 1 });
+      } else {
+        await botcrmApi.createDeal({ contactId, pipelineId: pipeline?.id, stageId, title, amount: Number(amount) || 0 });
+      }
+      await saved(Boolean(deal));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Не удалось сохранить сделку");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={(event) => event.target === event.currentTarget && close()}>
+      <form className="modal deal-modal" onSubmit={submit}>
+        <header>
+          <div><span className="eyebrow">Карточка канбана</span><h2>{deal ? "Редактировать сделку" : "Создать сделку"}</h2></div>
+          <button type="button" className="icon-button" onClick={close}><X size={19} /></button>
+        </header>
+        <div className="modal-body">
+          <label className="form-field">
+            <span>Контакт</span>
+            <AppSelect
+              ariaLabel="Контакт сделки"
+              className="deal-contact-select"
+              disabled={Boolean(deal)}
+              value={contactId}
+              onValueChange={setContactId}
+              options={contactOptions}
+              placeholder="Выберите контакт"
+              searchable
+              searchPlaceholder="Имя, телефон, email, username или ID"
+              matchTriggerWidth
+            />
+          </label>
+          <label className="form-field">
+            <span>Название сделки</span>
+            <input required minLength={2} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Например: Покупка тарифа Pro" />
+          </label>
+          <div className="form-split">
+            {!deal && <label className="form-field">
+              <span>Стадия</span>
+              <AppSelect ariaLabel="Стадия сделки" className="deal-stage-select" value={stageId} onValueChange={setStageId} options={stageOptions} matchTriggerWidth />
+            </label>}
+            <label className="form-field"><span>Сумма, ₽</span><input type="number" min="0" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
+          </div>
+          {error && <div className="form-error"><AlertTriangle size={15} />{error}</div>}
+        </div>
+        <footer>
+          <button type="button" className="button secondary" onClick={close}>Отмена</button>
+          <button className="button primary" disabled={busy || !contactId || !title.trim()}>{busy && <RefreshCw className="spin" size={15} />}Сохранить</button>
+        </footer>
+      </form>
+    </div>
+  );
 }
+
 function CampaignsView({ canManage, items, onCreate, onStart, onPause, onCancel, actionId }: { canManage: boolean; items: CampaignCardItem[]; onCreate: () => void; onStart: (id?: string) => void; onPause: (id?: string) => void; onCancel: (id?: string) => void; actionId: string | null }) {
   const [status,setStatus]=useState<"all"|"running"|"scheduled"|"draft">("all");
   const [days,setDays]=useState("30");
