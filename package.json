@@ -27,7 +27,7 @@
         "dev": "vinext dev",
         "build": "vinext build",
         "start": "vinext start",
-        "test": "npm run build && node --test tests/rendered-html.test.mjs",
+        "test": "npm run build && node --test tests/rendered-html.test.mjs tests/migrate-failure.test.mjs",
         "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
         "db:generate": "drizzle-kit generate",
         "db:migrate:realtime": "node --env-file=.env infra/scripts/apply-migration.mjs infra/migrations/007_realtime_notifications.sql",
