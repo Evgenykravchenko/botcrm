@@ -1,6 +1,6 @@
 {
     "name": "botcrm-monorepo",
-    "version": "0.2.3",
+    "version": "0.2.4",
     "private": true,
     "license": "AGPL-3.0-only",
     "description": "Self-hosted CRM и единый центр управления для самописных ботов",
