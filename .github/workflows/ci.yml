@@ -47,7 +47,7 @@ jobs:
         shell: bash
         run: |
           for attempt in {1..30}; do
-            if docker compose -f infra/docker-compose.yml exec -T postgres pg_isready -U botcrm -d botcrm; then
+            if node --input-type=module -e "import pg from 'pg'; const client = new pg.Client({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 1000 }); await client.connect(); await client.query('select 1'); await client.end();"; then
               exit 0
             fi
             sleep 2

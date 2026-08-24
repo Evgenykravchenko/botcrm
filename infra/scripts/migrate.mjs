@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { Client } from "pg";
 
 const root = resolve(import.meta.dirname, "../..");
@@ -10,7 +10,7 @@ if (!databaseUrl) throw new Error("DATABASE_URL is required");
 const client = new Client({
   connectionString: databaseUrl,
   application_name: "botcrm-migrations",
-  connectionTimeoutMillis: 10_000,
+  connectionTimeoutMillis: Number(process.env.MIGRATION_CONNECTION_TIMEOUT_MS ?? 10_000),
 });
 
 function checksum(content) {
@@ -56,9 +56,14 @@ async function run(name, sql, allowExistingBaseline = false) {
   }
 }
 
+let connected = false;
+let lockAcquired = false;
+
 try {
   await client.connect();
+  connected = true;
   await client.query("select pg_advisory_lock(hashtext('botcrm-schema-migrations'))");
+  lockAcquired = true;
   await client.query("create table if not exists schema_migrations(name text primary key, checksum char(64) not null, applied_at timestamptz not null default now())");
 
   const baseline = await readFile(join(root, "infra", "postgres.sql"), "utf8");
@@ -72,6 +77,10 @@ try {
 
   console.log("BotCRM database schema is up to date.");
 } finally {
-  await client.query("select pg_advisory_unlock(hashtext('botcrm-schema-migrations'))").catch(() => undefined);
-  await client.end().catch(() => undefined);
+  if (lockAcquired) {
+    await client.query("select pg_advisory_unlock(hashtext('botcrm-schema-migrations'))").catch(() => undefined);
+  }
+  if (connected) {
+    await client.end().catch(() => undefined);
+  }
 }
