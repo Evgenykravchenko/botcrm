@@ -164,7 +164,7 @@ export class BotCrmService implements OnModuleInit, OnModuleDestroy {
   deleteSegment(id: string, workspace: string) { if (!this.database) throw new DomainError(503, "PostgreSQL is required for segments", "persistent_storage_required"); return this.database.deleteSegment(id, workspace); }
   previewSegment(workspace: string, input: { segmentId?: string; filter?: SegmentGroup; channel?: Channel; limit?: number }) { if (!this.database) throw new DomainError(503, "PostgreSQL is required for segment previews", "persistent_storage_required"); return this.database.previewSegment(workspace, input); }
   previewCampaign(input: Parameters<BotCrmCore["previewCampaign"]>[0]) { return this.database ? this.database.previewCampaign(input) : this.memory.previewCampaign(input); }
-  createCampaign(workspace: string, input: { name: string; channel: Channel; content: string; buttons?: CampaignButton[]; mediaIds?: string[]; segmentId?: string; audience?: number; excluded?: number; scheduledAt?: string; timeZone?: string }) { return this.database ? this.database.createCampaign(workspace, input) : this.memory.createCampaign(workspace, { name: input.name, channel: input.channel, content: input.content, audience: input.audience ?? 0, excluded: input.excluded ?? 0 }); }
+  createCampaign(workspace: string, input: { name: string; channel: Channel; content: string; buttons?: CampaignButton[]; mediaIds?: string[]; segmentId?: string; audience?: number; excluded?: number; scheduledAt?: string; timeZone?: string }, actorId: string) { return this.database ? this.database.createCampaign(workspace, input, actorId) : this.memory.createCampaign(workspace, { name: input.name, channel: input.channel, content: input.content, audience: input.audience ?? 0, excluded: input.excluded ?? 0 }); }
   listCampaigns(workspace: string) { return this.database ? this.database.listCampaigns(workspace) : this.memory.listCampaigns(workspace); }
   getAudit(workspace: string) { return this.database ? this.database.getAudit(workspace) : this.memory.getAudit(workspace); }
 search(workspace: string, query: string, limit?: number) { return this.database ? this.database.search(workspace, query, limit) : Promise.resolve([]); }
@@ -557,7 +557,11 @@ export class ApiController {
 
   @Post("campaigns")
   @Roles("OWNER", "ADMIN", "SUPERVISOR")
-  createCampaign(@Body() body: { name: string; channel: Channel; content: string; buttons?: CampaignButton[]; mediaIds?: string[]; segmentId?: string; scheduledAt?: string; timeZone?: string }, @Headers() headers: Record<string, string | undefined>) { this.authorize(headers); return this.core.createCampaign(this.workspace(headers), body); }
+  createCampaign(@Body() body: { name: string; channel: Channel; content: string; buttons?: CampaignButton[]; mediaIds?: string[]; segmentId?: string; scheduledAt?: string; timeZone?: string }, @Headers() headers: Record<string, string | undefined>, @Req() request: { auth?: AuthPrincipal }) {
+    this.authorize(headers);
+    if (!request.auth) throw new DomainError(401, "Authentication required", "authentication_required");
+    return this.core.createCampaign(this.workspace(headers), body, request.auth.userId);
+  }
 
   @Post("campaigns/test")
   @Roles("OWNER", "ADMIN", "SUPERVISOR")

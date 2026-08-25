@@ -15,7 +15,7 @@ test("dynamic segments preview the audience and constrain campaign snapshots", a
     const filter = { operator: "AND" as const, conditions: [{ field: "attributes.segment_test_key", operator: "equals" as const, value: suffix }, { field: "attributes.lead_score", operator: "gte" as const, value: 80 }] };
     const segment = await store.createSegment("ws_demo", { name: `Hot test ${suffix}`, filter }); segmentId = segment.id; assert.equal(segment.count, 1);
     const preview = await store.previewSegment("ws_demo", { segmentId, channel: "api", limit: 10 }); assert.equal(preview.total, 1); assert.equal(preview.eligible, 1); assert.equal(preview.contacts[0].id, contactId);
-    const campaign = await store.createCampaign("ws_demo", { name: `Segment campaign ${suffix}`, channel: "api", content: "Only the matching segment", segmentId }); campaignId = campaign.id; assert.equal(campaign.audience, 1); assert.equal(campaign.excluded, 0);
+    const campaign = await store.createCampaign("ws_demo", { name: `Segment campaign ${suffix}`, channel: "api", content: "Only the matching segment", segmentId }, "00000000-0000-4000-8000-000000000002"); campaignId = campaign.id; assert.equal(campaign.audience, 1); assert.equal(campaign.excluded, 0);
     const started = await store.startCampaign(campaignId, "ws_demo"); assert.equal(started.queued, 1); assert.equal(started.jobs[0].contactId, contactId);
     await assert.rejects(() => store.startCampaign(campaignId!, "ws_demo"), (error: unknown) => error instanceof DomainError && error.code === "campaign_state_conflict");
     await assert.rejects(() => store.deleteSegment(segmentId!, "ws_demo"), (error: unknown) => error instanceof DomainError && error.code === "segment_in_use");
