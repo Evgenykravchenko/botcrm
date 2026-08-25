@@ -66,7 +66,7 @@ export function CampaignRichContent({ channel, buttons, onButtonsChange, media, 
       <button type="button" disabled={!capability.imageLimit || media.length >= capability.imageLimit || uploading} onClick={() => fileRef.current?.click()}><ImagePlus size={14} />{uploading ? "Загрузка…" : "Добавить фото"}</button>
       <input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void uploadImages(event)} />
     </div>
-    {!!media.length && <div className="campaign-media-grid">{media.map((image) => <figure key={image.id}><img src={image.previewUrl} alt={image.filename} /><button type="button" aria-label={`Удалить ${image.filename}`} onClick={() => removeMedia(image.id)}><X size={13} /></button><figcaption>{image.filename}</figcaption></figure>)}</div>}
+    {!!media.length && <div className="campaign-media-grid">{media.map((image) => <figure key={image.id}>{image.previewUrl ? <img src={image.previewUrl} alt={image.filename} /> : <div className="campaign-media-placeholder"><ImagePlus size={20} /><span>Фото сохранено</span></div>}<button type="button" aria-label={`Удалить ${image.filename}`} onClick={() => removeMedia(image.id)}><X size={13} /></button><figcaption>{image.filename}</figcaption></figure>)}</div>}
     {!!buttons.length && <div className="campaign-button-list">{buttons.map((button, index) => <article key={button.id}>
       <div className="campaign-button-order"><button type="button" disabled={index === 0} aria-label="Поднять кнопку" onClick={() => moveButton(index, -1)}><ArrowUp size={13} /></button><button type="button" disabled={index === buttons.length - 1} aria-label="Опустить кнопку" onClick={() => moveButton(index, 1)}><ArrowDown size={13} /></button></div>
       <label><span>Текст кнопки</span><input value={button.text} maxLength={64} onChange={(event) => updateButton(button.id, { text: event.target.value })} /></label>
@@ -76,6 +76,6 @@ export function CampaignRichContent({ channel, buttons, onButtonsChange, media, 
       <button type="button" className="campaign-button-delete" aria-label="Удалить кнопку" onClick={() => onButtonsChange(buttons.filter((item) => item.id !== button.id))}><Trash2 size={15} /></button>
     </article>)}</div>}
     {(error || validation) && <p className="campaign-rich-error">{error || validation}</p>}
-    <div className="campaign-message-mock"><div className={`campaign-mock-media count-${Math.min(media.length, 4)}`}>{media.map((image) => <img key={image.id} src={image.previewUrl} alt="" />)}</div><p>{previewText}</p>{grouped.map((row, index) => <div className="campaign-mock-buttons" key={index}>{row.map((button) => <span key={button.id}>{button.type === "url" && <Link2 size={11} />}{button.text || "Кнопка"}</span>)}</div>)}</div>
+    <div className="campaign-message-mock"><div className={`campaign-mock-media count-${Math.min(media.length, 4)}`}>{media.map((image) => image.previewUrl ? <img key={image.id} src={image.previewUrl} alt="" /> : <div className="campaign-media-placeholder mock" key={image.id}><ImagePlus size={18} /></div>)}</div><p>{previewText}</p>{grouped.map((row, index) => <div className="campaign-mock-buttons" key={index}>{row.map((button) => <span key={button.id}>{button.type === "url" && <Link2 size={11} />}{button.text || "Кнопка"}</span>)}</div>)}</div>
   </section>;
 }

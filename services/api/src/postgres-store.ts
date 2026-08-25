@@ -795,7 +795,43 @@ export class PostgresStore {
     const result = await this.pool.query("insert into campaigns(workspace_id,name,segment_id,status,channel_content,audience_snapshot,scheduled_at,created_by) values($1,$2,$3,$4,$5,$6,$7,$8) returning *", [workspaceId, name, input.segmentId ?? null, status, JSON.stringify({ [input.channel]: { ...composed, timeZone } }), JSON.stringify({ audience: preview.total, eligible: preview.eligible, excluded: preview.excluded }), scheduledAt?.toISOString() ?? null, actorId]);
     if (input.segmentId) { const segmentName = await this.pool.query("select name from segments where id=$1", [input.segmentId]); result.rows[0].segment_name = segmentName.rows[0]?.name; }
     return this.mapCampaign(result.rows[0]);
-  }  async listCampaigns(workspace: string) { const workspaceId = await this.workspaceId(workspace); const result = await this.pool.query(`select c.*,s.name segment_name,count(cr.id)::int recipient_total,count(cr.id) filter(where cr.status in ('SENT','DELIVERED','READ'))::int sent_count,count(cr.id) filter(where cr.status in ('DELIVERED','READ'))::int delivered_count,count(cr.id) filter(where cr.status='READ')::int read_count,count(cr.id) filter(where cr.status='FAILED')::int failed_count from campaigns c left join segments s on s.id=c.segment_id left join campaign_recipients cr on cr.campaign_id=c.id where c.workspace_id=$1 group by c.id,s.name order by c.created_at desc`, [workspaceId]); return result.rows.map((row) => this.mapCampaign(row)); }
+  }
+
+  async updateCampaign(id: string, workspace: string, input: { name: string; channel: Channel; content: string; buttons?: CampaignButton[]; mediaIds?: string[]; segmentId?: string; scheduledAt?: string; timeZone?: string }, actorId: string) {
+    const workspaceId = await this.workspaceId(workspace);
+    const current = await this.pool.query("select status from campaigns where id=$1 and workspace_id=$2", [id, workspaceId]);
+    if (!current.rowCount) throw new DomainError(404, "Campaign not found", "campaign_not_found");
+    if (!["DRAFT", "SCHEDULED"].includes(current.rows[0].status)) throw new DomainError(409, "Only draft or scheduled campaigns can be edited", "campaign_state_conflict");
+    const actor = await this.pool.query("select 1 from users where id=$1 and workspace_id=$2 and disabled_at is null", [actorId, workspaceId]);
+    if (!actor.rowCount) throw new DomainError(403, "Campaign editor is not an active workspace user", "invalid_campaign_editor");
+    const name = String(input.name ?? "").trim();
+    const composed = validateCampaignContent(input.channel, input);
+    if (name.length < 2) throw new DomainError(400, "Campaign name is required", "invalid_campaign");
+    if (input.segmentId) {
+      const segment = await this.pool.query("select 1 from segments where id=$1 and workspace_id=$2", [input.segmentId, workspaceId]);
+      if (!segment.rowCount) throw new DomainError(404, "Segment not found", "segment_not_found");
+    }
+    if (composed.mediaIds.length) {
+      const uploads = await this.pool.query("select id,status,mime_type from media_uploads where id=any($1::uuid[]) and workspace_id=$2", [composed.mediaIds, workspaceId]);
+      if (uploads.rowCount !== composed.mediaIds.length || uploads.rows.some((row) => !["UPLOADED", "ATTACHED"].includes(row.status) || !String(row.mime_type).startsWith("image/"))) throw new DomainError(409, "Campaign images must be uploaded image files from this workspace", "campaign_media_not_ready");
+    }
+    const preview = await this.previewSegment(workspace, { segmentId: input.segmentId, channel: input.channel, limit: 1 });
+    const scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : undefined;
+    const timeZone = String(input.timeZone ?? "Europe/Moscow");
+    try { new Intl.DateTimeFormat("en", { timeZone }).format(); } catch { throw new DomainError(400, "Invalid campaign time zone", "invalid_campaign_time_zone"); }
+    if (scheduledAt && Number.isNaN(scheduledAt.valueOf())) throw new DomainError(400, "Invalid campaign schedule", "invalid_campaign_schedule");
+    if (scheduledAt && scheduledAt.valueOf() <= Date.now()) throw new DomainError(400, "Campaign schedule must be in the future", "invalid_campaign_schedule");
+    const status = scheduledAt ? "SCHEDULED" : "DRAFT";
+    const result = await this.pool.query("update campaigns set name=$3,segment_id=$4,status=$5,channel_content=$6,audience_snapshot=$7,scheduled_at=$8,updated_at=now() where id=$1 and workspace_id=$2 and status in ('DRAFT','SCHEDULED') returning *", [id, workspaceId, name, input.segmentId ?? null, status, JSON.stringify({ [input.channel]: { ...composed, timeZone } }), JSON.stringify({ audience: preview.total, eligible: preview.eligible, excluded: preview.excluded }), scheduledAt?.toISOString() ?? null]);
+    if (!result.rowCount) throw new DomainError(409, "Campaign state changed while it was being edited", "campaign_state_conflict");
+    if (input.segmentId) {
+      const segmentName = await this.pool.query("select name from segments where id=$1", [input.segmentId]);
+      result.rows[0].segment_name = segmentName.rows[0]?.name;
+    }
+    return this.mapCampaign(result.rows[0]);
+  }
+
+  async listCampaigns(workspace: string) { const workspaceId = await this.workspaceId(workspace); const result = await this.pool.query(`select c.*,s.name segment_name,count(cr.id)::int recipient_total,count(cr.id) filter(where cr.status in ('SENT','DELIVERED','READ'))::int sent_count,count(cr.id) filter(where cr.status in ('DELIVERED','READ'))::int delivered_count,count(cr.id) filter(where cr.status='READ')::int read_count,count(cr.id) filter(where cr.status='FAILED')::int failed_count from campaigns c left join segments s on s.id=c.segment_id left join campaign_recipients cr on cr.campaign_id=c.id where c.workspace_id=$1 group by c.id,s.name order by c.created_at desc`, [workspaceId]); return result.rows.map((row) => this.mapCampaign(row)); }
   async search(workspace: string, rawQuery: string, requestedLimit = 30) {
     const query = String(rawQuery ?? "").trim().slice(0, 100);
     if (query.length < 2) return [];
