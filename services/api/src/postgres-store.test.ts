@@ -136,13 +136,17 @@ test("PostgreSQL enforces campaign pause, resume, cancellation and recipient sup
   let recipientContactId: string | undefined;
   const botId = randomUUID();
   const connectorId = randomUUID();
+  const campaignCreatorId = randomUUID();
   try {
+    await store.pool.query("insert into users(id,workspace_id,email,display_name,role) values($1,$2,$3,$4,'SUPERVISOR')", [campaignCreatorId, workspaceUuid, `campaign-${campaignCreatorId}@example.test`, "Campaign creator"]);
     await store.pool.query("insert into bots(id,workspace_id,slug,name,integration_mode) values($1,$2,$3,$4,'MIRROR')", [botId, workspaceUuid, `campaign_test_${botId.replaceAll("-", "")}`, "Campaign lifecycle test bot"]);
     await store.pool.query("insert into connectors(id,workspace_id,bot_id,channel,encrypted_credentials,status) values($1,$2,$3,'whatsapp',$4,'CONNECTED')", [connectorId, workspaceUuid, botId, JSON.stringify({ test: true })]);
     const recipient = await store.createContact("ws_demo", { displayName: "Campaign lifecycle recipient", channel: "whatsapp", externalUserId: `wa_${randomUUID()}` });
     recipientContactId = recipient.id;
-    const created = await store.createCampaign("ws_demo", { name: `Lifecycle ${randomUUID()}`, channel: "whatsapp", content: "Lifecycle test", audience: 1, excluded: 0 });
+    const created = await store.createCampaign("ws_demo", { name: `Lifecycle ${randomUUID()}`, channel: "whatsapp", content: "Lifecycle test", audience: 1, excluded: 0 }, campaignCreatorId);
     campaignId = created.id;
+    const persistedCreator = await store.pool.query("select created_by from campaigns where id=$1", [campaignId]);
+    assert.equal(persistedCreator.rows[0].created_by, campaignCreatorId);
     const started = await store.startCampaign(campaignId, "ws_demo");
     assert.equal(started.channel, "whatsapp");
     assert.ok((started.queued ?? 0) >= 1);
@@ -166,6 +170,7 @@ test("PostgreSQL enforces campaign pause, resume, cancellation and recipient sup
     }
     await store.pool.query("delete from connectors where id=$1", [connectorId]).catch(() => undefined);
     await store.pool.query("delete from bots where id=$1", [botId]).catch(() => undefined);
+    await store.pool.query("delete from users where id=$1", [campaignCreatorId]).catch(() => undefined);
     await store.close();
   }
 });
