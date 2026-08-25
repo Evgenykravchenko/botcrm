@@ -147,9 +147,13 @@ test("PostgreSQL enforces campaign pause, resume, cancellation and recipient sup
     campaignId = created.id;
     const persistedCreator = await store.pool.query("select created_by from campaigns where id=$1", [campaignId]);
     assert.equal(persistedCreator.rows[0].created_by, campaignCreatorId);
+    const updated = await store.updateCampaign(campaignId, "ws_demo", { name: "Lifecycle edited", channel: "whatsapp", content: "Updated lifecycle test" }, campaignCreatorId);
+    assert.equal(updated.name, "Lifecycle edited");
+    assert.equal(updated.content, "Updated lifecycle test");
     const started = await store.startCampaign(campaignId, "ws_demo");
     assert.equal(started.channel, "whatsapp");
     assert.ok((started.queued ?? 0) >= 1);
+    await assert.rejects(() => store.updateCampaign(campaignId!, "ws_demo", { name: "Too late", channel: "whatsapp", content: "Cannot edit running" }, campaignCreatorId), (error: unknown) => error instanceof DomainError && error.code === "campaign_state_conflict");
     assert.equal((await store.pauseCampaign(campaignId, "ws_demo")).status, "paused");
     const resumed = await store.startCampaign(campaignId, "ws_demo");
     assert.ok((resumed.queued ?? 0) >= 1);

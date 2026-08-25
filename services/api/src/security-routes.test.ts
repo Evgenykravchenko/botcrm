@@ -32,7 +32,7 @@ test("RBAC metadata matches the product role matrix", () => {
   for (const method of ["listContacts", "createContact", "updateContact", "setContactTags", "contactActivity", "addContactNote", "addContactTask", "completeTask", "listConversations", "markConversationRead", "pipelines", "createDeal", "updateDeal", "listDeals", "moveDeal", "listSegments", "previewSegment", "listCampaigns", "listConnectors", "listAutomations", "automationRuns", "search", "analytics"]) {
     assert.deepEqual(metadata(ROLES_ROUTE, ApiController.prototype, method), humanRoles, `${method} must remain available to operators`);
   }
-  for (const method of ["exportContacts", "importContacts", "mergeContacts", "createPipeline", "updatePipeline", "createStage", "updateStage", "deleteStage", "createSegment", "updateSegment", "deleteSegment", "previewCampaign", "createCampaign", "testCampaign", "pauseCampaign", "cancelCampaign", "listCampaignRecipients", "checkConnector", "createAutomation", "updateAutomation", "deleteAutomation", "testAutomation", "audit"]) {
+  for (const method of ["exportContacts", "importContacts", "mergeContacts", "createPipeline", "updatePipeline", "createStage", "updateStage", "deleteStage", "createSegment", "updateSegment", "deleteSegment", "previewCampaign", "createCampaign", "updateCampaign", "testCampaign", "pauseCampaign", "cancelCampaign", "listCampaignRecipients", "checkConnector", "createAutomation", "updateAutomation", "deleteAutomation", "testAutomation", "audit"]) {
     assert.deepEqual(metadata(ROLES_ROUTE, ApiController.prototype, method), supervisorRoles, `${method} must require supervisor access`);
   }
   for (const method of ["anonymizeContact", "createConnector", "updateConnector", "deleteConnector"]) {
