@@ -85,7 +85,15 @@ const publicationStatuses = new Set<ContentPublicationStatus>(["draft", "publish
 const mediaStatuses = new Set<MediaPreparationStatus>(["draft", "queued", "processing", "ready", "error"]);
 
 function normalizeDiskPath(value: string) {
-  const normalized = `/${value.trim().replace(/^disk:\/?/i, "").replace(/^\/+|\/+$/g, "")}`;
+  let source = value.trim();
+  if (source.slice(0, 5).toLowerCase() === "disk:") source = source.slice(5);
+  let start = 0;
+  let end = source.length;
+  while (start < end && source.charCodeAt(start) === 47) start += 1;
+  while (end > start && source.charCodeAt(end - 1) === 47) end -= 1;
+  const path = source.slice(start, end);
+  if (path.length > 2048) throw new DomainError(400, "Yandex Disk path is too long", "invalid_yandex_path");
+  const normalized = path ? `/${path}` : "/";
   if (normalized.split("/").includes("..")) throw new DomainError(400, "Yandex Disk path is invalid", "invalid_yandex_path");
   return normalized === "/" ? "/" : normalized;
 }

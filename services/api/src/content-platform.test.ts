@@ -41,7 +41,7 @@ test("Yandex Disk browser stays inside the bot folder and returns safe file meta
     const url = new URL(String(input));
     assert.equal(url.searchParams.get("path"), "/VK Content Bot/photos");
     assert.equal(new Headers(init?.headers).get("authorization"), "OAuth disk-secret");
-    return new Response(JSON.stringify({ _embedded: { items: [{ name: "test.jpg", path: "disk:/VK Content Bot/photos/test.jpg", type: "file", mime_type: "image/jpeg", size: 2048, preview: "https://preview.example/test.jpg" }] } }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ _embedded: { items: [{ name: "test.jpg", path: `disk:${"/".repeat(5_000)}VK Content Bot/photos/test.jpg///`, type: "file", mime_type: "image/jpeg", size: 2048, preview: "https://preview.example/test.jpg" }] } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   try {
     const service = new ContentPlatformService();
