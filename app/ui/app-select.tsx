@@ -66,7 +66,11 @@ export function AppSelect({
     const rect = trigger.getBoundingClientRect();
     const viewportPadding = 10;
     const desiredHeight = Math.min(330, options.length * 48 + (searchable ? 62 : 12));
-    const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const modal = trigger.closest(".modal");
+    const modalFooter = modal?.querySelector<HTMLElement>(":scope > footer, :scope > form > footer");
+    const footerTop = modalFooter?.getBoundingClientRect().top;
+    const lowerBoundary = footerTop && footerTop > rect.bottom ? Math.min(window.innerHeight, footerTop) : window.innerHeight;
+    const spaceBelow = lowerBoundary - rect.bottom - viewportPadding;
     const spaceAbove = rect.top - viewportPadding;
     const openAbove = spaceBelow < Math.min(desiredHeight, 180) && spaceAbove > spaceBelow;
     const maxHeight = Math.max(120, Math.min(desiredHeight, openAbove ? spaceAbove - 8 : spaceBelow - 8));
