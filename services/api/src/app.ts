@@ -15,6 +15,7 @@ import { exportContacts, parseContactImport } from "./contact-transfer.js";
 import { RealtimeService } from "./realtime.js";
 import { AttributeDefinitionInput } from "./attribute-definition.js";
 import { parseWebhookChallenge } from "./input-normalization.js";
+import { ContentMediaInput, ContentPlatformService, KeywordReplyInput } from "./content-platform.js";
 
 @Injectable()
 export class BotCrmService implements OnModuleInit, OnModuleDestroy {
@@ -168,6 +169,7 @@ export class BotCrmService implements OnModuleInit, OnModuleDestroy {
   updateCampaign(id: string, workspace: string, input: { name: string; channel: Channel; content: string; buttons?: CampaignButton[]; mediaIds?: string[]; segmentId?: string; scheduledAt?: string; timeZone?: string }, actorId: string) { if (!this.database) throw new DomainError(503, "PostgreSQL is required for campaigns", "persistent_storage_required"); return this.database.updateCampaign(id, workspace, input, actorId); }
   listCampaigns(workspace: string) { return this.database ? this.database.listCampaigns(workspace) : this.memory.listCampaigns(workspace); }
   getAudit(workspace: string) { return this.database ? this.database.getAudit(workspace) : this.memory.getAudit(workspace); }
+  recordExternalAudit(workspace: string, actorId: string, action: string, entityType: string, entityId: string, changes: Record<string, unknown>) { return this.database ? this.database.recordExternalAudit(workspace, actorId, action, entityType, entityId, changes) : Promise.resolve(); }
 search(workspace: string, query: string, limit?: number) { return this.database ? this.database.search(workspace, query, limit) : Promise.resolve([]); }
   analytics(workspace: string, days?: number) { if (!this.database) throw new DomainError(503, "PostgreSQL is required for analytics", "persistent_storage_required"); return this.database.analytics(workspace, days); }
   webhookConnector(id:string,channel:Channel) { if(!this.database) throw new DomainError(503,"PostgreSQL is required for connectors","persistent_storage_required"); return this.database.webhookConnector(id,channel); }
@@ -676,5 +678,110 @@ export class ApiController {
   async audit(@Headers() headers: Record<string, string | undefined>, @Query("limit") limit = "100") { this.authorize(headers); const entries = await this.core.getAudit(this.workspace(headers)); return entries.slice(0, Math.min(Number(limit) || 100, 1000)); }
 }
 
-@Module({ controllers: [SystemController, RealtimeController, AuthController, AdminController, ApiController], providers: [BotCrmService, CampaignQueueService, RealtimeService, AuthService, RateLimitGuard, AuthGuard, { provide: APP_GUARD, useExisting: RateLimitGuard }, { provide: APP_GUARD, useExisting: AuthGuard }] })
+@ApiTags("keyword replies")
+@Controller("keyword-replies")
+export class KeywordRepliesController {
+  constructor(@Inject(ContentPlatformService) private readonly content: ContentPlatformService, @Inject(BotCrmService) private readonly core: BotCrmService) {}
+
+  private workspace(request: { auth?: AuthPrincipal }) {
+    if (!request.auth) throw new DomainError(401, "Authentication required", "authentication_required");
+    return request.auth.workspaceId;
+  }
+
+  private id(value: string) {
+    const id = Number(value);
+    if (!Number.isSafeInteger(id) || id <= 0) throw new DomainError(400, "Content item ID is invalid", "invalid_content_item_id");
+    return id;
+  }
+
+  private async audited<T>(request: { auth?: AuthPrincipal }, action: string, entityType: string, entityId: string | ((result: T) => string), changes: Record<string, unknown>, operation: () => Promise<T>) {
+    const principal = request.auth;
+    if (!principal) throw new DomainError(401, "Authentication required", "authentication_required");
+    const result = await operation();
+    const resolvedEntityId = typeof entityId === "function" ? entityId(result) : entityId;
+    await this.core.recordExternalAudit(principal.workspaceId, principal.userId, action, entityType, resolvedEntityId, changes).catch((error) => console.error("Content audit write failed", error));
+    return result;
+  }
+
+  @Get("bots")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR", "OPERATOR")
+  listBots(@Req() request: { auth?: AuthPrincipal }) {
+    return this.content.listBots(this.workspace(request));
+  }
+
+  @Get()
+  @Roles("OWNER", "ADMIN", "SUPERVISOR", "OPERATOR")
+  listRules(@Query("botSlug") botSlug: string, @Req() request: { auth?: AuthPrincipal }) {
+    return this.content.listRules(this.workspace(request), botSlug);
+  }
+
+  @Post()
+  @Roles("OWNER", "ADMIN", "SUPERVISOR")
+  createRule(@Query("botSlug") botSlug: string, @Body() body: KeywordReplyInput, @Req() request: { auth?: AuthPrincipal }) {
+    return this.audited(request, "keyword_reply.created", "keyword_reply", (result) => String((result as { id?: number } | undefined)?.id ?? "unknown"), { botSlug, phrase: body.phrase }, () => this.content.createRule(this.workspace(request), botSlug, body));
+  }
+
+  @Patch(":id")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR")
+  updateRule(@Param("id") id: string, @Query("botSlug") botSlug: string, @Body() body: KeywordReplyInput, @Req() request: { auth?: AuthPrincipal }) {
+    return this.audited(request, "keyword_reply.updated", "keyword_reply", id, { botSlug, phrase: body.phrase }, () => this.content.updateRule(this.workspace(request), botSlug, this.id(id), body));
+  }
+
+  @Delete(":id")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR")
+  deleteRule(@Param("id") id: string, @Query("botSlug") botSlug: string, @Req() request: { auth?: AuthPrincipal }) {
+    return this.audited(request, "keyword_reply.deleted", "keyword_reply", id, { botSlug }, () => this.content.deleteRule(this.workspace(request), botSlug, this.id(id)));
+  }
+
+  @Get("settings")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR", "OPERATOR")
+  settings(@Query("botSlug") botSlug: string, @Req() request: { auth?: AuthPrincipal }) {
+    return this.content.settings(this.workspace(request), botSlug);
+  }
+
+  @Patch("configuration")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR")
+  updateSettings(@Query("botSlug") botSlug: string, @Body() body: { unknownMessage?: string; fallbackResponseId?: number | null }, @Req() request: { auth?: AuthPrincipal }) {
+    return this.audited(request, "keyword_reply.settings_updated", "content_bot", botSlug, { fallbackResponseId: body.fallbackResponseId ?? null, hasUnknownMessage: Boolean(body.unknownMessage?.trim()) }, () => this.content.updateSettings(this.workspace(request), botSlug, body));
+  }
+
+  @Get("media")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR", "OPERATOR")
+  media(@Query("botSlug") botSlug: string, @Req() request: { auth?: AuthPrincipal }) {
+    return this.content.listMedia(this.workspace(request), botSlug);
+  }
+
+  @Get("media/files")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR", "OPERATOR")
+  diskFiles(@Query("botSlug") botSlug: string, @Query("path") path: string | undefined, @Req() request: { auth?: AuthPrincipal }) {
+    return this.content.listYandexFiles(this.workspace(request), botSlug, path);
+  }
+
+  @Get("media/preview")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR", "OPERATOR")
+  async diskPreview(@Query("botSlug") botSlug: string, @Query("path") path: string, @Req() request: { auth?: AuthPrincipal }, @Res() reply: any) {
+    const preview = await this.content.yandexFilePreview(this.workspace(request), botSlug, path);
+    return reply.header("content-type", preview.contentType).header("cache-control", "private, max-age=300").header("x-content-type-options", "nosniff").send(preview.body);
+  }
+
+  @Post("media")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR")
+  createMedia(@Query("botSlug") botSlug: string, @Body() body: ContentMediaInput, @Req() request: { auth?: AuthPrincipal }) {
+    return this.audited(request, "content_media.created", "content_media", (result) => String((result as { id?: number } | undefined)?.id ?? "unknown"), { botSlug, name: body.name, kind: body.kind }, () => this.content.createMedia(this.workspace(request), botSlug, body));
+  }
+
+  @Patch("media/:id")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR")
+  updateMedia(@Param("id") id: string, @Query("botSlug") botSlug: string, @Body() body: ContentMediaInput, @Req() request: { auth?: AuthPrincipal }) {
+    return this.audited(request, "content_media.updated", "content_media", id, { botSlug, name: body.name, kind: body.kind, status: body.status }, () => this.content.updateMedia(this.workspace(request), botSlug, this.id(id), body));
+  }
+
+  @Delete("media/:id")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR")
+  deleteMedia(@Param("id") id: string, @Query("botSlug") botSlug: string, @Req() request: { auth?: AuthPrincipal }) {
+    return this.audited(request, "content_media.deleted", "content_media", id, { botSlug }, () => this.content.deleteMedia(this.workspace(request), botSlug, this.id(id)));
+  }
+}
+
+@Module({ controllers: [SystemController, RealtimeController, AuthController, AdminController, ApiController, KeywordRepliesController], providers: [BotCrmService, CampaignQueueService, RealtimeService, AuthService, ContentPlatformService, RateLimitGuard, AuthGuard, { provide: APP_GUARD, useExisting: RateLimitGuard }, { provide: APP_GUARD, useExisting: AuthGuard }] })
 export class AppModule {}
