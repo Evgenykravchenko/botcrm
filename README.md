@@ -5,7 +5,7 @@
 
   **Self-hosted CRM и единый центр управления для самописных ботов**
 
-  Диалоги · контакты · переменные · перехват оператором · воронки · рассылки · автоматизации · аналитика
+  Диалоги · контакты · переменные · перехват оператором · воронки · рассылки · автоответы · автоматизации · аналитика
 
   <p>
     <a href="https://github.com/Evgenykravchenko/botcrm/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Evgenykravchenko/botcrm/ci.yml?branch=main&style=flat-square&label=CI" /></a>
@@ -55,6 +55,7 @@ BotCRM добавляет к уже работающим ботам операц
 - **Управление ботом.** Атомарный перехват разговора оператором и возврат управления совместимому боту.
 - **Воронки.** Неограниченные воронки и стадии, ручное перемещение сделок и автоматические переходы.
 - **Рассылки.** Динамические сегменты, шаблонные переменные, изображения, кнопки, расписание, часовые пояса и результаты получателей.
+- **Автоответы.** Универсальные правила по ключевым словам, текст, медиа с Яндекс Диска, кнопки и fallback через подключённую Content Platform.
 - **Автоматизации.** Событие → условия → действия: поля, теги, задачи, стадии, оператор, сообщение или подписанный webhook.
 - **Каналы.** Telegram, VK, WhatsApp Cloud API, Avito Messenger API и универсальный REST/Mirror SDK.
 - **Аналитика.** Обращения, конверсия, выручка, каналы, состояние воронки и эффективность ботов.
@@ -68,6 +69,7 @@ flowchart LR
     Channels["Telegram / VK / WhatsApp / Avito"] --> API["API и адаптеры"]
     Bots["Самописные боты"] <--> API
     Web["Web-панель"] <--> API
+    API --> Content["Content Platform / Directus"]
     API --> DB[("PostgreSQL")]
     API --> Redis[("Redis / BullMQ")]
     Worker["Worker"] --> Redis
@@ -265,6 +267,7 @@ examples/             тестовый Telegram-бот
 - [Production-развёртывание](docs/PRODUCTION.md)
 - [Запуск и эксплуатация](docs/STARTUP.md)
 - [Руководство пользователя](docs/USER_GUIDE.md)
+- [Автоответы и Content Platform](docs/KEYWORD_REPLIES.md)
 - [Интеграция для разработчика](docs/DEVELOPER_GUIDE.md)
 - Интерактивная документация после запуска: `/docs`
 - Swagger/OpenAPI после запуска: `/api-docs`
