@@ -11,26 +11,26 @@
         "test:integration": "node --import tsx --test src/postgres-store.test.ts"
     },
     "dependencies": {
-        "@aws-sdk/client-s3": "^3.1114.0",
-        "@aws-sdk/s3-request-presigner": "^3.1114.0",
-        "@fastify/static": "10.1.3",
+        "@aws-sdk/client-s3": "^3.1156.0",
+        "@aws-sdk/s3-request-presigner": "^3.1156.0",
+        "@fastify/static": "10.1.7",
         "@nestjs/common": "^11.1.6",
         "@nestjs/core": "^11.1.6",
         "@nestjs/platform-fastify": "^11.2.8",
         "@nestjs/swagger": "^11.4.7",
-        "@node-rs/argon2": "^2.1.0",
+        "@node-rs/argon2": "^2.2.2",
         "bullmq": "^5.58.5",
         "dotenv": "^17.4.2",
-        "otplib": "^13.4.1",
-        "pg": "^8.23.0",
+        "otplib": "^13.5.0",
+        "pg": "^8.23.1",
         "reflect-metadata": "^0.2.2",
         "rxjs": "^7.8.2",
         "undici": "^7.30.1"
     },
     "devDependencies": {
-        "@types/node": "^22.20.1",
+        "@types/node": "^22.20.5",
         "@types/pg": "^8.23.1",
-        "tsx": "^4.23.12",
+        "tsx": "^4.23.15",
         "typescript": "^5.9.3"
     }
 }
