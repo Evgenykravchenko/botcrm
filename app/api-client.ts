@@ -177,6 +177,33 @@ export interface ApiAnalytics {
   funnel: Array<{ slug: string; name: string; color: string; position: number; count: number; amount: number }>;
   bots: Array<{ slug: string; name: string; conversations: number; won: number; score: number }>;
 }
+
+export type ApiKeywordMatchMode = "exact" | "contains" | "any_word" | "all_words";
+export type ApiKeywordBlockKind = "text" | "photo" | "video" | "audio" | "document";
+export type ApiKeywordButtonColor = "primary" | "secondary" | "positive" | "negative";
+export interface ApiContentBot { botSlug: string; contentBotKey: string; name: string; channel: "telegram" | "vk" | "instagram" | "other"; status: "active" | "paused"; description: string; }
+export interface ApiKeywordReplyBlock { id?: number; kind: ApiKeywordBlockKind; body: string; mediaId?: number; mediaName?: string; mediaStatus?: string; sort: number; sendSeparately: boolean; enabled: boolean; }
+export interface ApiKeywordReplyButton { id?: number; label: string; action: "text" | "open_link"; target: string; color: ApiKeywordButtonColor; row: number; sort: number; enabled: boolean; }
+export interface ApiKeywordReply {
+  id: number;
+  phrase: string;
+  matchMode: ApiKeywordMatchMode;
+  priority: number;
+  enabled: boolean;
+  response: { id: number; name: string; status: "draft" | "published"; fallbackText: string; blocks: ApiKeywordReplyBlock[]; buttons: ApiKeywordReplyButton[]; };
+}
+export interface ApiKeywordReplyInput {
+  phrase: string;
+  matchMode?: ApiKeywordMatchMode;
+  priority?: number;
+  enabled?: boolean;
+  response: { name: string; status?: "draft" | "published"; fallbackText?: string; blocks?: ApiKeywordReplyBlock[]; buttons?: ApiKeywordReplyButton[]; };
+}
+export interface ApiContentMedia { id: number; name: string; kind: Exclude<ApiKeywordBlockKind, "text">; yandexPath: string; status: "draft" | "queued" | "processing" | "ready" | "error"; vkAttachment: string; telegramFileId: string; mimeType: string; fileSize?: number; errorMessage: string; }
+export interface ApiContentMediaInput { name: string; kind: ApiContentMedia["kind"]; yandexPath: string; status?: ApiContentMedia["status"]; }
+export interface ApiYandexDiskItem { name: string; path: string; type: "file" | "dir"; kind?: ApiContentMedia["kind"]; mimeType?: string; size?: number; previewUrl?: string; }
+export interface ApiYandexDiskListing { root: string; path: string; items: ApiYandexDiskItem[]; }
+export interface ApiKeywordReplySettings { unknownMessage: string; fallbackResponseId?: number; }
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly code: string, message: string) {
     super(message);
@@ -205,11 +232,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return payload as T;
 }
 
-async function requestBlob(path: string): Promise<Blob> {
+async function requestBlob(path: string) {
   const headers = new Headers({ accept: "image/*", "x-workspace-id": "ws_demo" });
   if (typeof window !== "undefined") { const token = window.localStorage.getItem("botcrm_auth_token"); if (token) headers.set("authorization", `Bearer ${token}`); }
   const response = await fetch(`${apiBase()}${path}`, { headers, signal: AbortSignal.timeout(20_000) });
-  if (!response.ok) throw new ApiError(response.status, "avatar_load_failed", `Avatar returned ${response.status}`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
+    throw new ApiError(response.status, payload?.error?.code || "request_failed", payload?.error?.message || `API returned ${response.status}`);
+  }
   return response.blob();
 }
 
@@ -367,4 +397,17 @@ search: (query: string, limit = 30) => request<ApiSearchResult[]>(`/search?q=${e
   campaignRecipients: (campaignId: string) => request<ApiCampaignRecipient[]>(`/campaigns/${encodeURIComponent(campaignId)}/recipients`),
   pauseCampaign: (campaignId: string) => request<ApiCampaign>(`/campaigns/${encodeURIComponent(campaignId)}/pause`, { method: "POST", body: JSON.stringify({}) }),
   cancelCampaign: (campaignId: string) => request<ApiCampaign>(`/campaigns/${encodeURIComponent(campaignId)}/cancel`, { method: "POST", body: JSON.stringify({}) }),
+  contentBots: () => request<ApiContentBot[]>("/keyword-replies/bots"),
+  keywordReplies: (botSlug: string) => request<ApiKeywordReply[]>(`/keyword-replies?botSlug=${encodeURIComponent(botSlug)}`),
+  createKeywordReply: (botSlug: string, input: ApiKeywordReplyInput) => request<ApiKeywordReply>(`/keyword-replies?botSlug=${encodeURIComponent(botSlug)}`, { method: "POST", body: JSON.stringify(input) }),
+  updateKeywordReply: (botSlug: string, id: number, input: ApiKeywordReplyInput) => request<ApiKeywordReply>(`/keyword-replies/${id}?botSlug=${encodeURIComponent(botSlug)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  deleteKeywordReply: (botSlug: string, id: number) => request<{ ok: boolean }>(`/keyword-replies/${id}?botSlug=${encodeURIComponent(botSlug)}`, { method: "DELETE" }),
+  keywordReplySettings: (botSlug: string) => request<ApiKeywordReplySettings>(`/keyword-replies/settings?botSlug=${encodeURIComponent(botSlug)}`),
+  updateKeywordReplySettings: (botSlug: string, input: { unknownMessage?: string; fallbackResponseId?: number | null }) => request<ApiKeywordReplySettings>(`/keyword-replies/configuration?botSlug=${encodeURIComponent(botSlug)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  contentMedia: (botSlug: string) => request<ApiContentMedia[]>(`/keyword-replies/media?botSlug=${encodeURIComponent(botSlug)}`),
+  contentDiskFiles: (botSlug: string, path?: string) => request<ApiYandexDiskListing>(`/keyword-replies/media/files?botSlug=${encodeURIComponent(botSlug)}${path ? `&path=${encodeURIComponent(path)}` : ""}`),
+  contentDiskPreview: (botSlug: string, path: string) => requestBlob(`/keyword-replies/media/preview?botSlug=${encodeURIComponent(botSlug)}&path=${encodeURIComponent(path)}`),
+  createContentMedia: (botSlug: string, input: ApiContentMediaInput) => request<ApiContentMedia>(`/keyword-replies/media?botSlug=${encodeURIComponent(botSlug)}`, { method: "POST", body: JSON.stringify(input) }),
+  updateContentMedia: (botSlug: string, id: number, input: ApiContentMediaInput) => request<ApiContentMedia>(`/keyword-replies/media/${id}?botSlug=${encodeURIComponent(botSlug)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  deleteContentMedia: (botSlug: string, id: number) => request<{ ok: boolean }>(`/keyword-replies/media/${id}?botSlug=${encodeURIComponent(botSlug)}`, { method: "DELETE" }),
 };
