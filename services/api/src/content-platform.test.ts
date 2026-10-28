@@ -117,6 +117,36 @@ test("workspace bindings never expose another workspace content bot", async () =
   }
 });
 
+test("content bot provisioning creates its Yandex Disk folder once", async () => {
+  const previous = { url: process.env.CONTENT_PLATFORM_URL, token: process.env.CONTENT_PLATFORM_TOKEN, yandex: process.env.CONTENT_PLATFORM_YANDEX_TOKEN, bindings: process.env.CONTENT_PLATFORM_BINDINGS, fetch: globalThis.fetch };
+  process.env.CONTENT_PLATFORM_URL = "https://content.internal";
+  process.env.CONTENT_PLATFORM_TOKEN = "server-secret";
+  process.env.CONTENT_PLATFORM_YANDEX_TOKEN = "disk-secret";
+  delete process.env.CONTENT_PLATFORM_BINDINGS;
+  const createdPaths: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.hostname === "content.internal") return new Response(JSON.stringify({ data: [{ id: 1, key: "new-content", name: "New Bot" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    assert.equal(init?.method, "PUT");
+    assert.equal(new Headers(init?.headers).get("authorization"), "OAuth disk-secret");
+    createdPaths.push(String(url.searchParams.get("path")));
+    return new Response(JSON.stringify({ href: "https://cloud-api.yandex.net/operation/1" }), { status: 201, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const service = new ContentPlatformService();
+    const binding = { workspaceId: "ws_demo", botSlug: "new_bot", contentBotKey: "new-content", channel: "vk" as const, yandexRoot: "/bot_crm/new_bot" };
+    await service.ensureContentBot(binding);
+    await service.ensureContentBot(binding);
+    assert.deepEqual(createdPaths, ["/bot_crm", "/bot_crm/new_bot"]);
+  } finally {
+    globalThis.fetch = previous.fetch;
+    if (previous.url === undefined) delete process.env.CONTENT_PLATFORM_URL; else process.env.CONTENT_PLATFORM_URL = previous.url;
+    if (previous.token === undefined) delete process.env.CONTENT_PLATFORM_TOKEN; else process.env.CONTENT_PLATFORM_TOKEN = previous.token;
+    if (previous.yandex === undefined) delete process.env.CONTENT_PLATFORM_YANDEX_TOKEN; else process.env.CONTENT_PLATFORM_YANDEX_TOKEN = previous.yandex;
+    if (previous.bindings === undefined) delete process.env.CONTENT_PLATFORM_BINDINGS; else process.env.CONTENT_PLATFORM_BINDINGS = previous.bindings;
+  }
+});
+
 test("media library reuses a Yandex file and protects media used by a reply", async () => {
   const previous = { url: process.env.CONTENT_PLATFORM_URL, token: process.env.CONTENT_PLATFORM_TOKEN, bindings: process.env.CONTENT_PLATFORM_BINDINGS, fetch: globalThis.fetch };
   process.env.CONTENT_PLATFORM_URL = "https://content.internal";
@@ -148,6 +178,46 @@ test("media library reuses a Yandex file and protects media used by a reply", as
     blocks = [];
     assert.deepEqual(await service.deleteMedia("ws_demo", "vk_test_bot", 7), { ok: true });
     assert.deepEqual(deleted, [7]);
+  } finally {
+    globalThis.fetch = previous.fetch;
+    if (previous.url === undefined) delete process.env.CONTENT_PLATFORM_URL; else process.env.CONTENT_PLATFORM_URL = previous.url;
+    if (previous.token === undefined) delete process.env.CONTENT_PLATFORM_TOKEN; else process.env.CONTENT_PLATFORM_TOKEN = previous.token;
+    if (previous.bindings === undefined) delete process.env.CONTENT_PLATFORM_BINDINGS; else process.env.CONTENT_PLATFORM_BINDINGS = previous.bindings;
+  }
+});
+
+test("Instagram media delivery is stored and marks the source media ready", async () => {
+  const previous = { url: process.env.CONTENT_PLATFORM_URL, token: process.env.CONTENT_PLATFORM_TOKEN, bindings: process.env.CONTENT_PLATFORM_BINDINGS, fetch: globalThis.fetch };
+  process.env.CONTENT_PLATFORM_URL = "https://content.internal";
+  process.env.CONTENT_PLATFORM_TOKEN = "server-secret";
+  process.env.CONTENT_PLATFORM_BINDINGS = JSON.stringify([{ workspaceId: "ws_demo", botSlug: "instagram_test_bot", contentBotKey: "instagram-content", channel: "instagram" }]);
+  const writes: Array<{ path: string; method: string; body: Record<string, unknown> }> = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const collection = url.pathname.split("/")[2];
+    const method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    if (method !== "GET") writes.push({ path: url.pathname, method, body });
+    if (method === "POST" && collection === "media_deliveries") {
+      return new Response(JSON.stringify({ data: { id: 17, ...body } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (method === "PATCH" && collection === "media_assets") {
+      return new Response(JSON.stringify({ data: { id: 7, ...body } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const data = collection === "content_bots" ? [{ id: 1, key: "instagram-content", name: "Instagram Content" }]
+      : collection === "media_assets" ? [{ id: 7, bot: 1, name: "clip.mp4", kind: "video", yandex_path: "/Instagram/clip.mp4", status: "processing" }]
+        : [];
+    return new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const service = new ContentPlatformService();
+    const delivery = await service.runtimeSetMediaDelivery("ws_demo", "instagram_test_bot", 7, { externalReference: "instagram-media-id", expiresAt: "2099-01-01T00:00:00.000Z" });
+    assert.equal(delivery.external_reference, "instagram-media-id");
+    assert.deepEqual(writes.map((write) => [write.method, write.path]), [
+      ["POST", "/items/media_deliveries"],
+      ["PATCH", "/items/media_assets/7"],
+    ]);
+    assert.equal(writes[1].body.status, "ready");
   } finally {
     globalThis.fetch = previous.fetch;
     if (previous.url === undefined) delete process.env.CONTENT_PLATFORM_URL; else process.env.CONTENT_PLATFORM_URL = previous.url;

@@ -96,3 +96,24 @@ test("login account buckets are isolated between workspaces", async () => {
     restore("LOGIN_ROUTE_RATE_LIMIT_IP_MAX", previousIpMax);
   }
 });
+
+test("bot content rate limits are isolated by bot credential", async () => {
+  const previousRedis = process.env.REDIS_URL;
+  const previousMax = process.env.BOT_CONTENT_RATE_LIMIT_MAX;
+  delete process.env.REDIS_URL;
+  process.env.BOT_CONTENT_RATE_LIMIT_MAX = "1";
+  const guard = new RateLimitGuard();
+  const headers: Record<string, string | number> = {};
+  try {
+    await guard.onModuleInit();
+    const first = { method: "GET", url: "/api/v1/bot-content/rules", ip: "192.0.2.40", headers: { authorization: "Bearer bcr_first" } };
+    const second = { method: "GET", url: "/api/v1/bot-content/rules", ip: "192.0.2.40", headers: { authorization: "Bearer bcr_second" } };
+    assert.equal(await guard.canActivate(context(first, headers)), true);
+    assert.equal(await guard.canActivate(context(second, headers)), true);
+    await assert.rejects(() => guard.canActivate(context(first, headers)), (error: unknown) => error instanceof DomainError && error.code === "rate_limited");
+  } finally {
+    await guard.onModuleDestroy();
+    restore("REDIS_URL", previousRedis);
+    restore("BOT_CONTENT_RATE_LIMIT_MAX", previousMax);
+  }
+});

@@ -137,6 +137,7 @@ export interface ApiCampaignRecipient {
 
 export interface ApiConnector {
   id: string; workspaceId: string; botId: string; botSlug: string; botName: string; integrationMode: "GATEWAY" | "MIRROR"; eventEndpoint?: string;
+  contentManaged?: boolean; contentBotKey?: string;
   channel: ApiChannel; externalAccountId?: string; status: "pending" | "connected" | "warning" | "disabled"; capabilities: Record<string, unknown>;
   configuredFields: string[]; webhookUrl: string; lastHealthAt?: string; lastError?: string; createdAt: string;
 }
@@ -337,6 +338,8 @@ export const botcrmApi = {
 search: (query: string, limit = 30) => request<ApiSearchResult[]>(`/search?q=${encodeURIComponent(query)}&limit=${Math.min(50, Math.max(1, limit))}`),
   analytics: (days = 30) => request<ApiAnalytics>(`/analytics?days=${Math.min(365, Math.max(1, days))}`),
   connectors: () => request<ApiConnector[]>("/connectors"),
+  registerContentBot: (input: { botSlug: string; name: string; channel: ApiContentBot["channel"]; yandexRoot?: string }) => request<ApiContentBot>("/keyword-replies/bots", { method: "POST", body: JSON.stringify(input) }),
+  createContentToken: (botSlug: string, name = "Основной токен бота") => request<{ id: string; token: string; tokenPrefix: string }>(`/keyword-replies/bots/${encodeURIComponent(botSlug)}/tokens`, { method: "POST", body: JSON.stringify({ name }) }),
   createConnector: (input: ApiConnectorInput) => request<ApiConnector>("/connectors", { method: "POST", body: JSON.stringify(input) }),
   updateConnector: (id: string, input: Partial<Omit<ApiConnectorInput, "channel" | "botSlug">> & { enabled?: boolean }) => request<ApiConnector>(`/connectors/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }),
   checkConnector: (id: string) => request<ApiConnector>(`/connectors/${encodeURIComponent(id)}/check`, { method: "POST", body: JSON.stringify({}) }),

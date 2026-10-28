@@ -1,13 +1,14 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowLeft, ArrowRight, Bot, Check, ChevronDown, ChevronRight, CircleOff, FileText, Folder, Image as ImageIcon, Link2, LoaderCircle, MessageSquareReply, Music2, Pencil, Play, Plus, RefreshCw, Save, Search, Settings2, Trash2, UploadCloud, Video, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, ArrowRight, Bot, Check, ChevronDown, ChevronRight, CircleOff, Copy, FileText, Folder, Image as ImageIcon, Link2, LoaderCircle, MessageSquareReply, Music2, Pencil, Play, Plus, RefreshCw, Save, Search, Settings2, Trash2, UploadCloud, Video, X } from "lucide-react";
 import { ApiContentBot, ApiContentMedia, ApiContentMediaInput, ApiError, ApiKeywordBlockKind, ApiKeywordReply, ApiKeywordReplyButton, ApiKeywordReplyInput, ApiKeywordReplySettings, ApiYandexDiskItem, ApiYandexDiskListing, botcrmApi } from "./api-client";
 import { AppSelect, type AppSelectOption } from "./ui/app-select";
 
 type ViewTab = "rules" | "media" | "fallback";
 type Notice = { tone: "success" | "error"; text: string } | null;
 type DeleteTarget = { type: "rule"; item: ApiKeywordReply } | { type: "media"; item: ApiContentMedia };
+type IssuedToken = { token: string; botName: string };
 
 const matchModeLabels = {
   exact: "Точное совпадение",
@@ -72,7 +73,59 @@ function DeleteConfirmationDialog({ target, busy, close, confirm }: { target: De
   </div>;
 }
 
-export function KeywordRepliesView({ canManage }: { canManage: boolean }) {
+function ContentTokenDialog({ issued, busy, create, close }: { issued: IssuedToken | null; busy: boolean; create: () => void; close: () => void }) {
+  const [copied, setCopied] = useState(false);
+  async function copyToken() {
+    try {
+      await navigator.clipboard.writeText(issued.token);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  }
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) { if (event.key === "Escape") close(); }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [close]);
+  return <div className="modal-backdrop delete-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="content-token-title" onMouseDown={(event) => event.target === event.currentTarget && close()}>
+    <section className="modal content-token-modal">
+      <header><div><span className="eyebrow">Доступ бота к контенту</span><h2 id="content-token-title">{issued ? `Токен создан для «${issued.botName}»` : "Создать новый токен?"}</h2></div><button type="button" className="icon-button" onClick={close} disabled={busy} aria-label="Закрыть"><X size={18}/></button></header>
+      <div className="modal-body content-token-body">
+        {issued ? <><p>Добавьте этот секрет в <code>BOTCRM_CONTENT_TOKEN</code>. После закрытия окна BotCRM больше не покажет его полностью.</p><div className="content-token-value"><code>{issued.token}</code><button type="button" className="button secondary" onClick={() => void copyToken()}>{copied ? <Check size={16}/> : <Copy size={16}/>} {copied ? "Скопировано" : "Скопировать"}</button></div></> : <p>Будет создан отдельный секрет, с которым выбранный бот сможет читать и обновлять только свой контент. Действующие токены продолжат работать.</p>}
+      </div>
+      <footer>{issued ? <button type="button" className="button primary" onClick={close}>Готово</button> : <><button type="button" className="button secondary" onClick={close} disabled={busy}>Отмена</button><button type="button" className="button primary" onClick={create} disabled={busy}>{busy ? <LoaderCircle className="spin" size={16}/> : <Copy size={16}/>} Создать токен</button></>}</footer>
+    </section>
+  </div>;
+}
+
+function ContentBotDialog({ busy, close, create }: { busy: boolean; close: () => void; create: (input: { botSlug: string; name: string; channel: ApiContentBot["channel"]; yandexRoot?: string }) => void }) {
+  const [name, setName] = useState("");
+  const [botSlug, setBotSlug] = useState("");
+  const [channel, setChannel] = useState<ApiContentBot["channel"]>("vk");
+  const [yandexRoot, setYandexRoot] = useState("");
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    create({ botSlug, name, channel, yandexRoot: yandexRoot.trim() || undefined });
+  }
+  return <div className="modal-backdrop delete-confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="content-bot-title" onMouseDown={(event) => event.target === event.currentTarget && !busy && close()}>
+    <section className="modal content-token-modal">
+      <header><div><span className="eyebrow">Новое пространство контента</span><h2 id="content-bot-title">Добавить бота</h2></div><button type="button" className="icon-button" onClick={close} disabled={busy} aria-label="Закрыть"><X size={18}/></button></header>
+      <form onSubmit={submit}>
+        <div className="modal-body content-bot-form">
+          <label className="form-field"><span>Название</span><input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} placeholder="Например: Каталог Instagram"/></label>
+          <label className="form-field"><span>Техническое имя</span><input required pattern="[a-z0-9_]+" value={botSlug} onChange={(event) => setBotSlug(event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_"))} placeholder="instagram_catalog"/><small>Латинские буквы, цифры и подчёркивание. После подключения не меняется.</small></label>
+          <label className="form-field"><span>Канал</span><AppSelect ariaLabel="Канал контентного бота" value={channel} onValueChange={(value) => setChannel(value as ApiContentBot["channel"])} options={[{ value: "vk", label: "ВКонтакте" }, { value: "instagram", label: "Instagram" }, { value: "telegram", label: "Telegram" }, { value: "other", label: "Другой канал" }]} matchTriggerWidth/></label>
+          <div className="media-ready-note"><Check size={17}/><div><b>Папка создастся автоматически</b><span>BotCRM подготовит <code>/bot_crm/{botSlug || "техническое_имя"}</code> на Яндекс Диске.</span></div></div>
+          <details className="media-technical"><summary>Использовать другую папку</summary><label className="form-field"><span>Полный путь на Яндекс Диске</span><input value={yandexRoot} onChange={(event) => setYandexRoot(event.target.value)} placeholder="/другая_папка/бот"/><small>Оставьте пустым, если подходит стандартная папка BotCRM.</small></label></details>
+        </div>
+        <footer><button type="button" className="button secondary" onClick={close} disabled={busy}>Отмена</button><button className="button primary" disabled={busy || name.trim().length < 2 || !botSlug}>{busy ? <LoaderCircle className="spin" size={16}/> : <Plus size={16}/>} Добавить</button></footer>
+      </form>
+    </section>
+  </div>;
+}
+
+export function KeywordRepliesView({ canManage, canAdmin }: { canManage: boolean; canAdmin: boolean }) {
   const [bots, setBots] = useState<ApiContentBot[]>([]);
   const [botSlug, setBotSlug] = useState("");
   const [rules, setRules] = useState<ApiKeywordReply[]>([]);
@@ -87,6 +140,11 @@ export function KeywordRepliesView({ canManage }: { canManage: boolean }) {
   const [mediaEditor, setMediaEditor] = useState<ApiContentMedia | "new" | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
+  const [creatingToken, setCreatingToken] = useState(false);
+  const [issuedToken, setIssuedToken] = useState<IssuedToken | null>(null);
+  const [botDialogOpen, setBotDialogOpen] = useState(false);
+  const [creatingBot, setCreatingBot] = useState(false);
 
   async function loadBots() {
     setLoading(true); setError("");
@@ -165,14 +223,52 @@ export function KeywordRepliesView({ canManage }: { canManage: boolean }) {
     if (removed) setDeleteTarget(null);
   }
 
+  async function createBotToken() {
+    setCreatingToken(true);
+    try {
+      const result = await botcrmApi.createContentToken(botSlug);
+      setIssuedToken({ token: result.token, botName: bot?.name || botSlug });
+    } catch (tokenError) {
+      setNotice({ tone: "error", text: errorText(tokenError, "Не удалось создать токен бота") });
+    } finally {
+      setCreatingToken(false);
+    }
+  }
+
+  function openTokenDialog() {
+    setIssuedToken(null);
+    setTokenDialogOpen(true);
+  }
+
+  function closeTokenDialog() {
+    if (creatingToken) return;
+    setTokenDialogOpen(false);
+    setIssuedToken(null);
+  }
+
+  async function createContentBot(input: { botSlug: string; name: string; channel: ApiContentBot["channel"]; yandexRoot?: string }) {
+    setCreatingBot(true);
+    try {
+      const created = await botcrmApi.registerContentBot(input);
+      setBots((items) => [...items.filter((item) => item.botSlug !== created.botSlug), created]);
+      setBotSlug(created.botSlug);
+      setBotDialogOpen(false);
+      setNotice({ tone: "success", text: "Пространство контента создано. Теперь выпустите персональный токен для процесса бота." });
+    } catch (createError) {
+      setNotice({ tone: "error", text: errorText(createError, "Не удалось добавить бота") });
+    } finally {
+      setCreatingBot(false);
+    }
+  }
+
   if (loading && !bots.length) return <div className="keyword-page page-scroll"><div className="keyword-state"><LoaderCircle className="spin" size={24}/><b>Подключаем платформу контента</b><span>Загружаем доступных ботов и правила</span></div></div>;
   if (error && !bots.length) return <div className="keyword-page page-scroll"><div className="keyword-state error"><AlertCircle size={28}/><b>Автоответы пока недоступны</b><span>{error}</span><button className="button secondary" onClick={() => void loadBots()}><RefreshCw size={15}/>Повторить</button></div></div>;
-  if (!bots.length) return <div className="keyword-page page-scroll"><div className="keyword-state"><CircleOff size={28}/><b>Нет подключённых контентных ботов</b><span>Администратор должен привязать бота к этому рабочему пространству.</span></div></div>;
+  if (!bots.length) return <div className="keyword-page page-scroll"><div className="keyword-state"><CircleOff size={28}/><b>Нет подключённых контентных ботов</b><span>Администратор должен привязать бота к этому рабочему пространству.</span>{canAdmin && <button className="button primary" onClick={() => setBotDialogOpen(true)}><Plus size={16}/>Добавить бота</button>}</div>{botDialogOpen && <ContentBotDialog busy={creatingBot} close={() => !creatingBot && setBotDialogOpen(false)} create={(input) => void createContentBot(input)}/>}</div>;
 
   return <div className="keyword-page page-scroll">
     <section className="keyword-hero">
       <div className="keyword-hero-copy"><span className="keyword-icon"><MessageSquareReply size={22}/></span><div><span className="eyebrow">Контент без изменения кода</span><h2>Автоответы по ключевым словам</h2><p>Человек пишет фразу — бот находит правило и отправляет подготовленный текст, файл и кнопки.</p></div></div>
-      <div className="keyword-bot-picker"><label>Контентный бот</label><div><span className={`channel-badge ${channelClass(bot?.channel || "other")}`}>{bot ? channelLabels[bot.channel] : "Канал"}</span><AppSelect compact className="keyword-bot-select" ariaLabel="Контентный бот" value={botSlug} onValueChange={setBotSlug} options={bots.map((item) => ({ value: item.botSlug, label: item.name, detail: channelLabels[item.channel] }))} matchTriggerWidth/></div><small>{bot?.status === "active" ? "Подключён и принимает изменения" : "Бот приостановлен"}</small></div>
+      <div className="keyword-bot-picker"><label>Контентный бот</label><div><span className={`channel-badge ${channelClass(bot?.channel || "other")}`}>{bot ? channelLabels[bot.channel] : "Канал"}</span><AppSelect compact className="keyword-bot-select" ariaLabel="Контентный бот" value={botSlug} onValueChange={setBotSlug} options={bots.map((item) => ({ value: item.botSlug, label: item.name, detail: channelLabels[item.channel] }))} matchTriggerWidth/></div><small>{bot?.status === "active" ? "Управляется BotCRM" : "Бот приостановлен"}</small>{canAdmin && <div className="keyword-bot-admin-actions"><button className="button secondary" onClick={openTokenDialog}><Copy size={14}/>Токен</button><button className="button secondary" onClick={() => setBotDialogOpen(true)}><Plus size={14}/>Бот</button></div>}</div>
     </section>
 
     <section className="keyword-summary">
@@ -194,6 +290,8 @@ export function KeywordRepliesView({ canManage }: { canManage: boolean }) {
     {editor && <RuleEditor initial={editor === "new" ? undefined : editor} botSlug={botSlug} media={media} mediaCreated={(item) => setMedia((items) => items.some((candidate) => candidate.id === item.id) ? items : [item, ...items])} mediaRemoved={removeMedia} close={() => setEditor(null)} save={saveRule}/>} 
     {mediaEditor && <MediaEditor initial={mediaEditor === "new" ? undefined : mediaEditor} botSlug={botSlug} close={() => setMediaEditor(null)} save={saveMedia}/>} 
     {deleteTarget && <DeleteConfirmationDialog target={deleteTarget} busy={deleting} close={() => setDeleteTarget(null)} confirm={() => void confirmRemoval()}/>} 
+    {tokenDialogOpen && <ContentTokenDialog issued={issuedToken} busy={creatingToken} create={() => void createBotToken()} close={closeTokenDialog}/>}
+    {botDialogOpen && <ContentBotDialog busy={creatingBot} close={() => !creatingBot && setBotDialogOpen(false)} create={(input) => void createContentBot(input)}/>}
     {notice && <div className={`keyword-notice ${notice.tone}`}>{notice.tone === "success" ? <Check size={16}/> : <AlertCircle size={16}/>}<span>{notice.text}</span></div>}
   </div>;
 }
