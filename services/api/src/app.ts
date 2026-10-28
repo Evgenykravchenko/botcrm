@@ -215,7 +215,7 @@ export class SystemController {
   constructor(@Inject(BotCrmService) private readonly core: BotCrmService, @Inject(CampaignQueueService) private readonly queue: CampaignQueueService) {}
   @Get("health")
   @PublicRoute()
-  async health() { return { status: "ok", service: "botcrm-api", version: "0.4.1", storage: this.core.storageMode(), database: await this.core.health(), queue: this.queue.status(), time: new Date().toISOString() }; }
+  async health() { return { status: "ok", service: "botcrm-api", version: "0.4.2", storage: this.core.storageMode(), database: await this.core.health(), queue: this.queue.status(), time: new Date().toISOString() }; }
 
   @Get("metrics")
   @Roles("OWNER", "ADMIN", "SUPERVISOR", "SERVICE")
@@ -714,7 +714,16 @@ export class KeywordRepliesController {
   private async prepare(workspaceId: string, botSlug?: string) {
     const profiles: any[] = await this.core.syncContentProfiles(workspaceId, this.content.legacyBindings(workspaceId));
     this.content.registerBindings(workspaceId, profiles);
-    for (const profile of profiles) await this.content.ensureContentBot(profile);
+    for (const profile of profiles) {
+      try { await this.content.ensureContentBot(profile); }
+      catch (error) {
+        if (error instanceof DomainError && error.code === "yandex_disk_write_permission_required") {
+          console.warn(`Yandex Disk folder provisioning is pending for content bot ${profile.botSlug}`);
+          continue;
+        }
+        throw error;
+      }
+    }
     if (botSlug && !profiles.some((profile) => profile.botSlug === botSlug)) throw new DomainError(404, "Content bot is not registered in BotCRM", "content_bot_not_found");
     return profiles;
   }
