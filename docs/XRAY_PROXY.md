@@ -41,7 +41,7 @@ npm run prod:tailscale:xray:up
 загрузка Telegram-аватаров и другие исходящие запросы к API канала перестанут
 работать.
 
-`NO_PROXY` оставляет обращения к PostgreSQL, Redis, MinIO и внутреннему API BotCRM внутри локальной сети. Проверка коннектора, ответы операторов, загрузка Telegram-медиа и рассылки используют Xray благодаря `EnvHttpProxyAgent` в процессах API и worker.
+`NO_PROXY` оставляет обращения к PostgreSQL, Redis, MinIO, Directus и внутреннему API BotCRM внутри локальной сети. Проверка коннектора, ответы операторов, загрузка Telegram-медиа и рассылки используют Xray благодаря `EnvHttpProxyAgent` в процессах API и worker.
 
 ## Проверка
 
