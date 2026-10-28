@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PUBLIC_ROUTE, ROLES_ROUTE } from "./auth.js";
-import { AdminController, ApiController, AuthController, KeywordRepliesController, RealtimeController, SystemController } from "./app.js";
+import { AdminController, ApiController, AuthController, BotContentRuntimeController, KeywordRepliesController, RealtimeController, SystemController } from "./app.js";
 
 function metadata(key: string, target: object, method: string) {
   const handler = (target as Record<string, unknown>)[method];
@@ -14,6 +14,7 @@ test("only operationally required endpoints are public", () => {
   assert.equal(metadata(PUBLIC_ROUTE, AuthController.prototype, "login"), true);
   assert.equal(metadata(PUBLIC_ROUTE, ApiController.prototype, "verifyWhatsApp"), true);
   assert.equal(metadata(PUBLIC_ROUTE, ApiController.prototype, "receiveWebhook"), true);
+  assert.equal(Reflect.getMetadata(PUBLIC_ROUTE, BotContentRuntimeController), true);
 
   assert.equal(metadata(PUBLIC_ROUTE, SystemController.prototype, "metrics"), undefined);
   assert.deepEqual(metadata(ROLES_ROUTE, SystemController.prototype, "metrics"), ["OWNER", "ADMIN", "SUPERVISOR", "SERVICE"]);
@@ -41,4 +42,5 @@ test("RBAC metadata matches the product role matrix", () => {
   assert.deepEqual(metadata(ROLES_ROUTE, ApiController.prototype, "processAutomation"), ["SERVICE"]);
   for (const method of ["listBots", "listRules", "settings", "media", "diskFiles", "diskPreview"]) assert.deepEqual(metadata(ROLES_ROUTE, KeywordRepliesController.prototype, method), humanRoles, `${method} must remain available to operators`);
   for (const method of ["createRule", "updateRule", "deleteRule", "updateSettings", "createMedia", "updateMedia", "deleteMedia"]) assert.deepEqual(metadata(ROLES_ROUTE, KeywordRepliesController.prototype, method), supervisorRoles, `${method} must require supervisor access`);
+  for (const method of ["registerBot", "listTokens", "createToken", "revokeToken"]) assert.deepEqual(metadata(ROLES_ROUTE, KeywordRepliesController.prototype, method), adminRoles, `${method} must require administrator access`);
 });

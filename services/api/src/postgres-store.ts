@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Pool, PoolClient } from "pg";
 import { AttachmentRecord, CampaignRecord, Channel, ControlMode, DealRecord, DomainError, MessageRecord, NormalizedEvent } from "./core.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MediaObjectHead, MediaUploadInput } from "./media.js";
@@ -458,14 +458,159 @@ export class PostgresStore {
   private mapConnector(row: Record<string, any>) {
     const credentials = decryptSecret(row.encrypted_credentials ?? {});
     const publicBase = (process.env.PUBLIC_API_URL ?? "http://localhost:4100/api/v1").replace(/\/$/, "");
-    return { id: row.id, workspaceId: row.workspace_id, botId: row.bot_id, botSlug: row.bot_slug, botName: row.bot_name, integrationMode: row.integration_mode, eventEndpoint: row.event_endpoint ?? undefined, channel: row.channel, externalAccountId: row.external_account_id ?? undefined, status: String(row.status).toLowerCase(), capabilities: row.capabilities ?? {}, configuredFields: Object.keys(credentials).filter((key) => credentials[key] !== undefined && credentials[key] !== ""), webhookUrl: `${publicBase}/webhooks/${row.channel}/${row.id}`, lastHealthAt: row.last_health_at ? new Date(row.last_health_at).toISOString() : undefined, lastError: row.last_error ?? undefined, createdAt: new Date(row.created_at).toISOString() };
+    return { id: row.id, workspaceId: row.workspace_id, botId: row.bot_id, botSlug: row.bot_slug, botName: row.bot_name, integrationMode: row.integration_mode, eventEndpoint: row.event_endpoint ?? undefined, channel: row.channel, externalAccountId: row.external_account_id ?? undefined, status: String(row.status).toLowerCase(), capabilities: row.capabilities ?? {}, configuredFields: Object.keys(credentials).filter((key) => credentials[key] !== undefined && credentials[key] !== ""), webhookUrl: `${publicBase}/webhooks/${row.channel}/${row.id}`, contentManaged: Boolean(row.content_bot_key), contentBotKey: row.content_bot_key ?? undefined, lastHealthAt: row.last_health_at ? new Date(row.last_health_at).toISOString() : undefined, lastError: row.last_error ?? undefined, createdAt: new Date(row.created_at).toISOString() };
   }
 
   async webhookConnector(id:string,channel:Channel) { const result=await this.pool.query("select c.*,b.slug bot_slug,b.integration_mode,b.event_endpoint from connectors c join bots b on b.id=c.bot_id where c.id=$1 and c.channel=$2 and b.enabled=true",[id,channel]); if(!result.rowCount) throw new DomainError(404,"Connector not found","connector_not_found"); const row=result.rows[0]; return {id:row.id,workspaceId:row.workspace_id,botId:row.bot_slug,integrationMode:row.integration_mode,eventEndpoint:row.event_endpoint,credentials:decryptSecret(row.encrypted_credentials??{})}; }
   async listConnectors(workspace: string) {
     const workspaceId = await this.workspaceId(workspace);
-    const result = await this.pool.query(`select c.*,b.slug bot_slug,b.name bot_name,b.integration_mode,b.event_endpoint from connectors c join bots b on b.id=c.bot_id where c.workspace_id=$1 order by c.created_at`, [workspaceId]);
+    const result = await this.pool.query(`select c.*,b.slug bot_slug,b.name bot_name,b.integration_mode,b.event_endpoint,p.content_bot_key
+      from connectors c join bots b on b.id=c.bot_id left join bot_content_profiles p on p.bot_id=b.id and p.enabled=true
+      where c.workspace_id=$1 order by c.created_at`, [workspaceId]);
     return result.rows.map((row) => this.mapConnector(row));
+  }
+
+  private mapContentProfile(row: Record<string, any>) {
+    return {
+      workspaceId: row.workspace_id,
+      botId: row.bot_id,
+      botSlug: row.bot_slug,
+      contentBotKey: row.content_bot_key,
+      label: row.bot_name,
+      channel: row.channel,
+      yandexRoot: row.yandex_root ?? undefined,
+      enabled: Boolean(row.enabled),
+      connectorCount: Number(row.connector_count ?? 0),
+      createdAt: new Date(row.created_at).toISOString(),
+    };
+  }
+
+  async syncContentProfiles(workspace: string, bindings: Array<{ botSlug: string; contentBotKey: string; label?: string; channel?: string; yandexRoot?: string }>) {
+    const workspaceId = await this.workspaceId(workspace);
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      for (const binding of bindings) {
+        const botName = String(binding.label || binding.botSlug).trim().slice(0, 255) || binding.botSlug;
+        const bot = await client.query(`insert into bots(workspace_id,slug,name,integration_mode)
+          values($1,$2,$3,'MIRROR')
+          on conflict(workspace_id,slug) do update set name=case when bots.name=bots.slug then excluded.name else bots.name end
+          returning id`, [workspaceId, binding.botSlug, botName]);
+        await client.query(`insert into bot_content_profiles(workspace_id,bot_id,content_bot_key,channel,yandex_root)
+          values($1,$2,$3,$4,$5)
+          on conflict(bot_id) do update set
+            content_bot_key=excluded.content_bot_key,
+            channel=excluded.channel,
+            yandex_root=coalesce(excluded.yandex_root,bot_content_profiles.yandex_root),
+            enabled=true,
+            updated_at=now()`, [workspaceId, bot.rows[0].id, binding.contentBotKey, ["telegram", "vk", "instagram"].includes(String(binding.channel)) ? binding.channel : "other", binding.yandexRoot ?? null]);
+      }
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return this.listContentProfiles(workspace);
+  }
+
+  async ensureContentProfile(workspace: string, botSlug: string, input: { label?: string; channel?: string; contentBotKey?: string; yandexRoot?: string } = {}) {
+    const workspaceId = await this.workspaceId(workspace);
+    const normalizedSlug = normalizeBotSlug(botSlug);
+    const normalizedKey = normalizedSlug.replaceAll("_", "-");
+    const contentBotKey = String(input.contentBotKey || `${workspaceId.replaceAll("-", "").slice(0, 12)}-${normalizedKey}`).toLowerCase();
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(contentBotKey)) throw new DomainError(400, "Content bot key is invalid", "invalid_content_bot_key");
+    const channel = ["telegram", "vk", "instagram"].includes(String(input.channel)) ? String(input.channel) : "other";
+    const yandexRoot = String(input.yandexRoot || `/${normalizedKey}`);
+    if (!yandexRoot.startsWith("/") || yandexRoot.split("/").includes("..")) throw new DomainError(400, "Yandex Disk root is invalid", "invalid_yandex_root");
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const bot = await client.query(`insert into bots(workspace_id,slug,name,integration_mode)
+        values($1,$2,$3,'MIRROR')
+        on conflict(workspace_id,slug) do update set name=case when $3='' then bots.name else $3 end
+        returning id`, [workspaceId, normalizedSlug, String(input.label ?? normalizedSlug).trim().slice(0, 255)]);
+      await client.query(`insert into bot_content_profiles(workspace_id,bot_id,content_bot_key,channel,yandex_root)
+        values($1,$2,$3,$4,$5)
+        on conflict(bot_id) do update set
+          content_bot_key=case when $6::boolean then excluded.content_bot_key else bot_content_profiles.content_bot_key end,
+          channel=excluded.channel,
+          yandex_root=case when $7::boolean then excluded.yandex_root else coalesce(bot_content_profiles.yandex_root,excluded.yandex_root) end,
+          enabled=true,
+          updated_at=now()`, [workspaceId, bot.rows[0].id, contentBotKey, channel, yandexRoot, Boolean(input.contentBotKey), Boolean(input.yandexRoot)]);
+      await client.query("commit");
+    } catch (error: any) {
+      await client.query("rollback");
+      if (error?.code === "23505") throw new DomainError(409, "This content key is already used by another bot", "content_bot_key_conflict");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return this.contentProfile(workspace, normalizedSlug);
+  }
+
+  async listContentProfiles(workspace: string) {
+    const workspaceId = await this.workspaceId(workspace);
+    const result = await this.pool.query(`select p.*,b.slug bot_slug,b.name bot_name,
+      (select count(*) from connectors c where c.bot_id=b.id)::int connector_count
+      from bot_content_profiles p join bots b on b.id=p.bot_id
+      where p.workspace_id=$1 and p.enabled=true and b.enabled=true
+      order by lower(b.name),b.slug`, [workspaceId]);
+    return result.rows.map((row) => this.mapContentProfile(row));
+  }
+
+  async contentProfile(workspace: string, botSlug: string) {
+    const workspaceId = await this.workspaceId(workspace);
+    const result = await this.pool.query(`select p.*,b.slug bot_slug,b.name bot_name,
+      (select count(*) from connectors c where c.bot_id=b.id)::int connector_count
+      from bot_content_profiles p join bots b on b.id=p.bot_id
+      where p.workspace_id=$1 and b.slug=$2 and p.enabled=true and b.enabled=true limit 1`, [workspaceId, botSlug]);
+    if (!result.rowCount) throw new DomainError(404, "Content bot is not registered in BotCRM", "content_bot_not_found");
+    return this.mapContentProfile(result.rows[0]);
+  }
+
+  async createContentToken(workspace: string, botSlug: string, input: { name?: string; expiresAt?: string }, actorId?: string) {
+    const profile = await this.contentProfile(workspace, botSlug);
+    const token = `bcr_${randomBytes(32).toString("base64url")}`;
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const name = String(input.name || "Основной токен бота").trim().slice(0, 120);
+    if (!name) throw new DomainError(400, "Token name is required", "content_token_name_required");
+    const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+    if (expiresAt && (!Number.isFinite(expiresAt.getTime()) || expiresAt <= new Date())) throw new DomainError(400, "Token expiration date is invalid", "invalid_content_token_expiry");
+    const createdBy = actorId && isUuid(actorId) ? actorId : null;
+    const result = await this.pool.query(`insert into bot_content_tokens(workspace_id,bot_id,name,token_hash,token_prefix,created_by,expires_at)
+      values($1,$2,$3,$4,$5,$6,$7)
+      returning id,name,token_prefix "tokenPrefix",created_at "createdAt",expires_at "expiresAt"`, [profile.workspaceId, profile.botId, name, tokenHash, token.slice(0, 12), createdBy, expiresAt]);
+    return { ...result.rows[0], botSlug, token };
+  }
+
+  async listContentTokens(workspace: string, botSlug: string) {
+    const profile = await this.contentProfile(workspace, botSlug);
+    const result = await this.pool.query(`select id,name,token_prefix "tokenPrefix",created_at "createdAt",last_used_at "lastUsedAt",expires_at "expiresAt",revoked_at "revokedAt"
+      from bot_content_tokens where workspace_id=$1 and bot_id=$2 order by created_at desc`, [profile.workspaceId, profile.botId]);
+    return result.rows;
+  }
+
+  async revokeContentToken(workspace: string, botSlug: string, tokenId: string) {
+    const profile = await this.contentProfile(workspace, botSlug);
+    const result = await this.pool.query("update bot_content_tokens set revoked_at=coalesce(revoked_at,now()) where id=$1 and workspace_id=$2 and bot_id=$3 returning id", [tokenId, profile.workspaceId, profile.botId]);
+    if (!result.rowCount) throw new DomainError(404, "Content token was not found", "content_token_not_found");
+    return { ok: true };
+  }
+
+  async resolveContentToken(token: string) {
+    if (!token.startsWith("bcr_") || token.length < 40) throw new DomainError(401, "Invalid bot content token", "invalid_content_token");
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const result = await this.pool.query(`select t.id token_id,p.*,b.slug bot_slug,b.name bot_name,0::int connector_count
+      from bot_content_tokens t
+      join bot_content_profiles p on p.bot_id=t.bot_id and p.workspace_id=t.workspace_id
+      join bots b on b.id=t.bot_id and b.workspace_id=t.workspace_id
+      where t.token_hash=$1 and t.revoked_at is null and (t.expires_at is null or t.expires_at>now())
+        and p.enabled=true and b.enabled=true limit 1`, [tokenHash]);
+    if (!result.rowCount) throw new DomainError(401, "Invalid or expired bot content token", "invalid_content_token");
+    await this.pool.query("update bot_content_tokens set last_used_at=now() where id=$1 and (last_used_at is null or last_used_at<now()-interval '5 minutes')", [result.rows[0].token_id]);
+    return this.mapContentProfile(result.rows[0]);
   }
 
   async createConnector(workspace: string, input: { botName: string; botSlug?: string; integrationMode?: "GATEWAY" | "MIRROR"; eventEndpoint?: string; channel: Channel; externalAccountId?: string; credentials?: Record<string, unknown> }) {
@@ -489,12 +634,16 @@ export class PostgresStore {
     try {
       await client.query("begin");
       const bot = await client.query("insert into bots(workspace_id,slug,name,integration_mode,event_endpoint) values($1,$2,$3,$4,$5) on conflict(workspace_id,slug) do update set name=excluded.name,integration_mode=excluded.integration_mode,event_endpoint=excluded.event_endpoint returning id", [workspaceId, botSlug, botName, integrationMode, input.eventEndpoint ?? null]);
+      const normalizedContentKey = botSlug.replaceAll("_", "-");
+      await client.query(`insert into bot_content_profiles(workspace_id,bot_id,content_bot_key,channel,yandex_root)
+        values($1,$2,$3,$4,$5)
+        on conflict(bot_id) do update set channel=excluded.channel,yandex_root=coalesce(bot_content_profiles.yandex_root,excluded.yandex_root),enabled=true,updated_at=now()`, [workspaceId, bot.rows[0].id, `${workspaceId.replaceAll("-", "").slice(0, 12)}-${normalizedContentKey}`, ["telegram", "vk"].includes(input.channel) ? input.channel : "other", `/${normalizedContentKey}`]);
       const capabilities = { telegram: { delivery: true, read: false, receiptMode: "sent_only", edit: true, delete: true, freeBroadcastRate: 30 }, vk: { delivery: true, read: false, receiptMode: "sent_only", edit: true }, whatsapp: { delivery: true, read: true, receiptMode: "webhook", templates: true, serviceWindowHours: 24 }, avito: { delivery: true, read: false, receiptMode: "sent_only", requiresEntitlement: true }, api: { delivery: true, read: true, receiptMode: "message.status", edit: true, templates: true } }[input.channel];
       const result = await client.query("insert into connectors(workspace_id,bot_id,channel,external_account_id,encrypted_credentials,capabilities,status) values($1,$2,$3,$4,$5,$6,$7) returning *", [workspaceId, bot.rows[0].id, input.channel, input.externalAccountId ?? null, JSON.stringify(encryptSecret(credentials)), JSON.stringify(capabilities), Object.keys(credentials).length ? "PENDING" : "WARNING"]);
       await client.query("insert into audit_events(workspace_id,actor_type,actor_id,action,entity_type,entity_id,changes) values($1,'USER',$2,'connector.created','connector',$3,$4)", [workspaceId, DEMO_USER_ID, result.rows[0].id, JSON.stringify({ channel: input.channel, botSlug })]);
       await client.query("commit");
       return this.mapConnector({ ...result.rows[0], bot_slug: botSlug, bot_name: botName, integration_mode: integrationMode, event_endpoint: input.eventEndpoint ?? null });
-    } catch (error: any) { await client.query("rollback"); if (error?.code === "23505") throw new DomainError(409, "A connector for this account already exists", "connector_exists"); throw error; } finally { client.release(); }
+    } catch (error: any) { await client.query("rollback"); if (error?.code === "23505" && String(error?.constraint ?? "").includes("bot_content_profiles_content_bot_key")) throw new DomainError(409, "This content key is already used by another bot", "content_bot_key_conflict"); if (error?.code === "23505") throw new DomainError(409, "A connector for this account already exists", "connector_exists"); throw error; } finally { client.release(); }
   }
 
   async updateConnector(id: string, workspace: string, input: { botName?: string; integrationMode?: "GATEWAY" | "MIRROR"; eventEndpoint?: string; externalAccountId?: string; credentials?: Record<string, unknown>; enabled?: boolean }) {
@@ -543,7 +692,7 @@ export class PostgresStore {
     const result = await this.pool.query("delete from connectors where id=$1 and workspace_id=$2 returning bot_id,channel", [id, workspaceId]);
     if (!result.rowCount) throw new DomainError(404, "Connector not found", "connector_not_found");
     await this.pool.query("insert into audit_events(workspace_id,actor_type,actor_id,action,entity_type,entity_id,changes) values($1,'USER',$2,'connector.deleted','connector',$3,$4)", [workspaceId, DEMO_USER_ID, id, JSON.stringify({ channel: result.rows[0].channel })]);
-    await this.pool.query("delete from bots where id=$1 and workspace_id=$2 and not exists(select 1 from connectors where bot_id=$1) and not exists(select 1 from conversations where bot_id=$1)", [result.rows[0].bot_id, workspaceId]);
+    await this.pool.query("delete from bots where id=$1 and workspace_id=$2 and not exists(select 1 from connectors where bot_id=$1) and not exists(select 1 from conversations where bot_id=$1) and not exists(select 1 from bot_content_profiles where bot_id=$1)", [result.rows[0].bot_id, workspaceId]);
     return { ok: true };
   }
   private mapAutomationRule(row: Record<string, any>) {

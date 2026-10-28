@@ -233,6 +233,7 @@ export class ContentPlatformService {
   private readonly token?: string;
   private readonly yandexToken?: string;
   private readonly bindings: ContentPlatformBinding[];
+  private readonly managedBindings = new Map<string, ContentPlatformBinding>();
 
   constructor() {
     this.baseUrl = process.env.CONTENT_PLATFORM_URL?.replace(/\/+$/, "");
@@ -252,9 +253,23 @@ export class ContentPlatformService {
   }
 
   private binding(workspaceId: string, botSlug: string) {
-    const binding = this.bindings.find((item) => item.workspaceId === workspaceId && item.botSlug === botSlug);
+    const binding = this.managedBindings.get(`${workspaceId}:${botSlug}`)
+      ?? this.bindings.find((item) => item.workspaceId === workspaceId && item.botSlug === botSlug);
     if (!binding) throw new DomainError(404, "Content bot is not available in this workspace", "content_bot_not_found");
     return binding;
+  }
+
+  legacyBindings(workspaceId: string) {
+    return this.bindings.filter((item) => item.workspaceId === workspaceId).map((item) => ({ ...item }));
+  }
+
+  registerBindings(workspaceId: string, bindings: ContentPlatformBinding[]) {
+    for (const key of this.managedBindings.keys()) if (key.startsWith(`${workspaceId}:`)) this.managedBindings.delete(key);
+    for (const binding of bindings) this.managedBindings.set(`${workspaceId}:${binding.botSlug}`, { ...binding, workspaceId });
+  }
+
+  registerBinding(binding: ContentPlatformBinding) {
+    this.managedBindings.set(`${binding.workspaceId}:${binding.botSlug}`, { ...binding });
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -366,6 +381,21 @@ export class ContentPlatformService {
     return bot;
   }
 
+  async ensureContentBot(binding: ContentPlatformBinding) {
+    this.configured();
+    this.managedBindings.set(`${binding.workspaceId}:${binding.botSlug}`, binding);
+    const query = new URLSearchParams({ "filter[key][_eq]": binding.contentBotKey, limit: "1", fields: "*" });
+    const [existing] = await this.items<DirectusRecord>("content_bots", query);
+    if (existing) return existing;
+    return this.createItem<DirectusRecord>("content_bots", {
+      key: binding.contentBotKey,
+      name: binding.label || binding.botSlug,
+      platform: binding.channel || "other",
+      status: "active",
+      description: "Контентом управляет BotCRM",
+    });
+  }
+
   private async createItem<T extends DirectusRecord>(collection: string, body: Record<string, unknown>) {
     const result = await this.request<DirectusEnvelope<T>>(`/items/${collection}`, { method: "POST", body: JSON.stringify(body) });
     return result.data;
@@ -382,7 +412,9 @@ export class ContentPlatformService {
 
   async listBots(workspaceId: string) {
     this.configured();
-    return Promise.all(this.bindings.filter((item) => item.workspaceId === workspaceId).map(async (binding) => {
+    const bindings = [...this.managedBindings.values()].filter((item) => item.workspaceId === workspaceId);
+    const source = bindings.length ? bindings : this.bindings.filter((item) => item.workspaceId === workspaceId);
+    return Promise.all(source.map(async (binding) => {
       const bot = await this.contentBot(binding);
       return {
         botSlug: binding.botSlug,
@@ -393,6 +425,143 @@ export class ContentPlatformService {
         description: String(bot.description ?? ""),
       };
     }));
+  }
+
+  async runtimeRules(workspaceId: string, botSlug: string) {
+    const rules = await this.listRules(workspaceId, botSlug);
+    return rules.filter((rule: any) => rule.enabled && rule.response.status === "published").map((rule: any) => ({
+      id: rule.id,
+      phrase: rule.phrase,
+      match_mode: rule.matchMode,
+      priority: rule.priority,
+      response: rule.response.id,
+      enabled: rule.enabled,
+    }));
+  }
+
+  async runtimeSettings(workspaceId: string, botSlug: string) {
+    const settings = await this.settings(workspaceId, botSlug);
+    return { unknown_message: settings.unknownMessage || null, fallback_response: settings.fallbackResponseId ?? null };
+  }
+
+  async runtimePreparedResponse(workspaceId: string, botSlug: string, responseId: number) {
+    const binding = this.binding(workspaceId, botSlug);
+    const records = await this.recordsForBot(binding);
+    const relationId = (value: unknown) => typeof value === "object" && value ? Number((value as { id?: unknown }).id) : Number(value);
+    const response = records.responses.find((item) => item.id === responseId && String(item.status ?? "draft") === "published");
+    if (!response) return null;
+    const mediaById = new Map(records.media.map((item) => [item.id, item]));
+    const deliveryByMedia = new Map<number, DirectusRecord>();
+    if (binding.channel === "instagram") {
+      const deliveries = await this.items<DirectusRecord>("media_deliveries", new URLSearchParams({
+        "filter[media][bot][_eq]": String(records.bot.id),
+        "filter[platform][_eq]": binding.channel,
+        "filter[status][_eq]": "ready",
+        "filter[expires_at][_gt]": new Date().toISOString(),
+        fields: "*",
+        limit: "-1",
+      }));
+      for (const delivery of deliveries) deliveryByMedia.set(relationId(delivery.media), delivery);
+    }
+    return {
+      response: {
+        id: response.id,
+        name: String(response.name ?? ""),
+        status: String(response.status ?? "draft"),
+        fallback_text: response.fallback_text == null ? null : String(response.fallback_text),
+      },
+      blocks: records.blocks
+        .filter((item) => relationId(item.response) === responseId && item.enabled !== false)
+        .sort((a, b) => Number(a.sort ?? 0) - Number(b.sort ?? 0) || a.id - b.id)
+        .map((block) => {
+          const media = mediaById.get(relationId(block.media));
+          return {
+            id: block.id,
+            response: responseId,
+            sort: Number(block.sort ?? 0),
+            kind: String(block.kind ?? "text"),
+            body: block.body == null ? null : String(block.body),
+            send_separately: Boolean(block.send_separately),
+            enabled: block.enabled !== false,
+            media: media ? { ...media, delivery: deliveryByMedia.get(media.id) ?? null } : null,
+          };
+        }),
+      buttons: records.buttons
+        .filter((item) => relationId(item.response) === responseId && item.enabled !== false)
+        .sort((a, b) => Number(a.row_number ?? 1) - Number(b.row_number ?? 1) || Number(a.sort ?? 0) - Number(b.sort ?? 0) || a.id - b.id)
+        .map((button) => ({
+          id: button.id,
+          response: responseId,
+          label: String(button.label ?? ""),
+          action: String(button.action ?? "text"),
+          target: String(button.target ?? ""),
+          color: String(button.color ?? "primary"),
+          row_number: Number(button.row_number ?? 1),
+          sort: Number(button.sort ?? 0),
+          enabled: button.enabled !== false,
+        })),
+    };
+  }
+
+  async runtimeQueuedMedia(workspaceId: string, botSlug: string, limit: number) {
+    const binding = this.binding(workspaceId, botSlug);
+    const records = await this.recordsForBot(binding);
+    const candidateIds = new Set(records.media.filter((item) => item.status === "queued").map((item) => item.id));
+    if (binding.channel === "instagram") {
+      const expired = await this.items<DirectusRecord>("media_deliveries", new URLSearchParams({
+        "filter[media][bot][_eq]": String(records.bot.id),
+        "filter[platform][_eq]": binding.channel,
+        "filter[status][_eq]": "ready",
+        "filter[expires_at][_lte]": new Date().toISOString(),
+        fields: "media.id",
+        sort: "expires_at",
+        limit: String(Math.min(20, Math.max(1, limit))),
+      }));
+      for (const delivery of expired) {
+        const mediaId = typeof delivery.media === "object" && delivery.media ? Number((delivery.media as { id?: unknown }).id) : Number(delivery.media);
+        if (Number.isSafeInteger(mediaId) && mediaId > 0) candidateIds.add(mediaId);
+      }
+    }
+    return records.media
+      .filter((item) => candidateIds.has(item.id))
+      .sort((a, b) => a.id - b.id)
+      .slice(0, Math.min(20, Math.max(1, limit)));
+  }
+
+  async runtimeSetMediaDelivery(workspaceId: string, botSlug: string, mediaId: number, input: { externalReference?: string; expiresAt?: string }) {
+    const binding = this.binding(workspaceId, botSlug);
+    if (binding.channel !== "instagram") throw new DomainError(409, "This bot does not use expiring media deliveries", "content_delivery_platform_missing");
+    const records = await this.recordsForBot(binding);
+    if (!records.media.some((item) => item.id === mediaId)) throw new DomainError(404, "Media item was not found", "content_media_not_found");
+    const externalReference = String(input.externalReference ?? "").trim();
+    if (!externalReference || externalReference.length > 2_000) throw new DomainError(400, "Media delivery reference is invalid", "invalid_media_delivery_reference");
+    const expiresAt = input.expiresAt ? new Date(input.expiresAt) : new Date(Date.now() + 80 * 24 * 60 * 60 * 1_000);
+    if (!Number.isFinite(expiresAt.getTime()) || expiresAt <= new Date()) throw new DomainError(400, "Media delivery expiration is invalid", "invalid_media_delivery_expiry");
+    const relationId = (value: unknown) => typeof value === "object" && value ? Number((value as { id?: unknown }).id) : Number(value);
+    const deliveries = await this.items<DirectusRecord>("media_deliveries", new URLSearchParams({
+      "filter[media][_eq]": String(mediaId),
+      "filter[platform][_eq]": binding.channel,
+      fields: "*",
+      limit: "1",
+    }));
+    const payload = { media: mediaId, platform: binding.channel, status: "ready", external_reference: externalReference, error_message: null, prepared_at: new Date().toISOString(), expires_at: expiresAt.toISOString() };
+    const delivery = deliveries[0]
+      ? await this.patchItem<DirectusRecord>("media_deliveries", deliveries[0].id, payload)
+      : await this.createItem<DirectusRecord>("media_deliveries", payload);
+    if (relationId(delivery.media) !== mediaId) throw new DomainError(502, "Content platform returned an invalid media delivery", "content_platform_invalid_response");
+    await this.patchItem<DirectusRecord>("media_assets", mediaId, { status: "ready", error_message: null });
+    return delivery;
+  }
+
+  async runtimeUpdateMedia(workspaceId: string, botSlug: string, mediaId: number, changes: Record<string, unknown>) {
+    const binding = this.binding(workspaceId, botSlug);
+    const records = await this.recordsForBot(binding);
+    if (!records.media.some((item) => item.id === mediaId)) throw new DomainError(404, "Media item was not found", "content_media_not_found");
+    const allowed = new Set(["status", "vk_attachment", "telegram_file_id", "mime_type", "file_size", "error_message"]);
+    const body = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.has(key)));
+    if (!Object.keys(body).length) throw new DomainError(400, "No supported media fields were supplied", "invalid_media_update");
+    if (body.status !== undefined && !mediaStatuses.has(body.status as MediaPreparationStatus)) throw new DomainError(400, "Media status is invalid", "invalid_media_status");
+    return this.patchItem<DirectusRecord>("media_assets", mediaId, body);
   }
 
   private async recordsForBot(binding: ContentPlatformBinding) {

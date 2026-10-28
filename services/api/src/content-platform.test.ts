@@ -155,3 +155,43 @@ test("media library reuses a Yandex file and protects media used by a reply", as
     if (previous.bindings === undefined) delete process.env.CONTENT_PLATFORM_BINDINGS; else process.env.CONTENT_PLATFORM_BINDINGS = previous.bindings;
   }
 });
+
+test("Instagram media delivery is stored and marks the source media ready", async () => {
+  const previous = { url: process.env.CONTENT_PLATFORM_URL, token: process.env.CONTENT_PLATFORM_TOKEN, bindings: process.env.CONTENT_PLATFORM_BINDINGS, fetch: globalThis.fetch };
+  process.env.CONTENT_PLATFORM_URL = "https://content.internal";
+  process.env.CONTENT_PLATFORM_TOKEN = "server-secret";
+  process.env.CONTENT_PLATFORM_BINDINGS = JSON.stringify([{ workspaceId: "ws_demo", botSlug: "instagram_test_bot", contentBotKey: "instagram-content", channel: "instagram" }]);
+  const writes: Array<{ path: string; method: string; body: Record<string, unknown> }> = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const collection = url.pathname.split("/")[2];
+    const method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    if (method !== "GET") writes.push({ path: url.pathname, method, body });
+    if (method === "POST" && collection === "media_deliveries") {
+      return new Response(JSON.stringify({ data: { id: 17, ...body } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (method === "PATCH" && collection === "media_assets") {
+      return new Response(JSON.stringify({ data: { id: 7, ...body } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const data = collection === "content_bots" ? [{ id: 1, key: "instagram-content", name: "Instagram Content" }]
+      : collection === "media_assets" ? [{ id: 7, bot: 1, name: "clip.mp4", kind: "video", yandex_path: "/Instagram/clip.mp4", status: "processing" }]
+        : [];
+    return new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const service = new ContentPlatformService();
+    const delivery = await service.runtimeSetMediaDelivery("ws_demo", "instagram_test_bot", 7, { externalReference: "instagram-media-id", expiresAt: "2099-01-01T00:00:00.000Z" });
+    assert.equal(delivery.external_reference, "instagram-media-id");
+    assert.deepEqual(writes.map((write) => [write.method, write.path]), [
+      ["POST", "/items/media_deliveries"],
+      ["PATCH", "/items/media_assets/7"],
+    ]);
+    assert.equal(writes[1].body.status, "ready");
+  } finally {
+    globalThis.fetch = previous.fetch;
+    if (previous.url === undefined) delete process.env.CONTENT_PLATFORM_URL; else process.env.CONTENT_PLATFORM_URL = previous.url;
+    if (previous.token === undefined) delete process.env.CONTENT_PLATFORM_TOKEN; else process.env.CONTENT_PLATFORM_TOKEN = previous.token;
+    if (previous.bindings === undefined) delete process.env.CONTENT_PLATFORM_BINDINGS; else process.env.CONTENT_PLATFORM_BINDINGS = previous.bindings;
+  }
+});

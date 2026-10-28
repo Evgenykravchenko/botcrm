@@ -8,6 +8,7 @@ type RateLimitRequest = {
   method?: string;
   url?: string;
   ip?: string;
+  headers?: Record<string, string | string[] | undefined>;
   body?: { email?: unknown; workspace?: unknown };
   raw?: { socket?: { remoteAddress?: string } };
 };
@@ -95,6 +96,13 @@ export class RateLimitGuard implements CanActivate, OnModuleInit, OnModuleDestro
       const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
       const workspace = typeof request.body?.workspace === "string" ? request.body.workspace.trim().toLowerCase() : "ws_demo";
       if (email) buckets.push({ scope: "login-account", identity: `${workspace}:${email}`, max: positiveInteger(process.env.LOGIN_ROUTE_RATE_LIMIT_EMAIL_MAX, 10), windowSeconds: positiveInteger(process.env.LOGIN_ROUTE_RATE_LIMIT_EMAIL_WINDOW_SECONDS, 900) });
+    } else if (path.includes("/bot-content/")) {
+      const authorization = request.headers?.authorization;
+      const contentToken = request.headers?.["x-bot-content-token"];
+      const suppliedCredential = (Array.isArray(contentToken) ? contentToken[0] : contentToken)
+        || (Array.isArray(authorization) ? authorization[0] : authorization);
+      const credential = suppliedCredential || ip;
+      buckets.push({ scope: "bot-content", identity: credential, max: positiveInteger(process.env.BOT_CONTENT_RATE_LIMIT_MAX, 1200), windowSeconds: positiveInteger(process.env.BOT_CONTENT_RATE_LIMIT_WINDOW_SECONDS, 60) });
     } else if (path.includes("/webhooks/")) {
       buckets.push({ scope: "webhook", identity: `${ip}:${path}`, max: positiveInteger(process.env.WEBHOOK_RATE_LIMIT_MAX, 3000), windowSeconds: positiveInteger(process.env.WEBHOOK_RATE_LIMIT_WINDOW_SECONDS, 60) });
     } else {
