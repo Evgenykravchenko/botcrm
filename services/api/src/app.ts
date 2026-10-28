@@ -215,7 +215,7 @@ export class SystemController {
   constructor(@Inject(BotCrmService) private readonly core: BotCrmService, @Inject(CampaignQueueService) private readonly queue: CampaignQueueService) {}
   @Get("health")
   @PublicRoute()
-  async health() { return { status: "ok", service: "botcrm-api", version: "0.3.2", storage: this.core.storageMode(), database: await this.core.health(), queue: this.queue.status(), time: new Date().toISOString() }; }
+  async health() { return { status: "ok", service: "botcrm-api", version: "0.4.0", storage: this.core.storageMode(), database: await this.core.health(), queue: this.queue.status(), time: new Date().toISOString() }; }
 
   @Get("metrics")
   @Roles("OWNER", "ADMIN", "SUPERVISOR", "SERVICE")
