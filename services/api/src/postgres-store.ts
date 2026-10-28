@@ -13,6 +13,12 @@ import { normalizeBotSlug } from "./input-normalization.js";
 const DEMO_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001";
 const DEMO_USER_ID = "00000000-0000-4000-8000-000000000002";
 
+function defaultContentYandexRoot(botSlug: string) {
+  const configuredRoot = String(process.env.CONTENT_PLATFORM_YANDEX_ROOT || "/bot_crm").trim().replace(/\/+$/, "");
+  if (!configuredRoot.startsWith("/") || configuredRoot.split("/").includes("..")) throw new DomainError(503, "Content Yandex Disk root is invalid", "content_platform_configuration_error");
+  return `${configuredRoot}/${botSlug}`;
+}
+
 function percentDelta(current: number, previous: number) {
   if (!previous) return current ? 100 : 0;
   return ((current - previous) / Math.abs(previous)) * 100;
@@ -522,7 +528,7 @@ export class PostgresStore {
     const contentBotKey = String(input.contentBotKey || `${workspaceId.replaceAll("-", "").slice(0, 12)}-${normalizedKey}`).toLowerCase();
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(contentBotKey)) throw new DomainError(400, "Content bot key is invalid", "invalid_content_bot_key");
     const channel = ["telegram", "vk", "instagram"].includes(String(input.channel)) ? String(input.channel) : "other";
-    const yandexRoot = String(input.yandexRoot || `/${normalizedKey}`);
+    const yandexRoot = String(input.yandexRoot || defaultContentYandexRoot(normalizedSlug));
     if (!yandexRoot.startsWith("/") || yandexRoot.split("/").includes("..")) throw new DomainError(400, "Yandex Disk root is invalid", "invalid_yandex_root");
     const client = await this.pool.connect();
     try {
@@ -637,7 +643,7 @@ export class PostgresStore {
       const normalizedContentKey = botSlug.replaceAll("_", "-");
       await client.query(`insert into bot_content_profiles(workspace_id,bot_id,content_bot_key,channel,yandex_root)
         values($1,$2,$3,$4,$5)
-        on conflict(bot_id) do update set channel=excluded.channel,yandex_root=coalesce(bot_content_profiles.yandex_root,excluded.yandex_root),enabled=true,updated_at=now()`, [workspaceId, bot.rows[0].id, `${workspaceId.replaceAll("-", "").slice(0, 12)}-${normalizedContentKey}`, ["telegram", "vk"].includes(input.channel) ? input.channel : "other", `/${normalizedContentKey}`]);
+        on conflict(bot_id) do update set channel=excluded.channel,yandex_root=coalesce(bot_content_profiles.yandex_root,excluded.yandex_root),enabled=true,updated_at=now()`, [workspaceId, bot.rows[0].id, `${workspaceId.replaceAll("-", "").slice(0, 12)}-${normalizedContentKey}`, ["telegram", "vk"].includes(input.channel) ? input.channel : "other", defaultContentYandexRoot(botSlug)]);
       const capabilities = { telegram: { delivery: true, read: false, receiptMode: "sent_only", edit: true, delete: true, freeBroadcastRate: 30 }, vk: { delivery: true, read: false, receiptMode: "sent_only", edit: true }, whatsapp: { delivery: true, read: true, receiptMode: "webhook", templates: true, serviceWindowHours: 24 }, avito: { delivery: true, read: false, receiptMode: "sent_only", requiresEntitlement: true }, api: { delivery: true, read: true, receiptMode: "message.status", edit: true, templates: true } }[input.channel];
       const result = await client.query("insert into connectors(workspace_id,bot_id,channel,external_account_id,encrypted_credentials,capabilities,status) values($1,$2,$3,$4,$5,$6,$7) returning *", [workspaceId, bot.rows[0].id, input.channel, input.externalAccountId ?? null, JSON.stringify(encryptSecret(credentials)), JSON.stringify(capabilities), Object.keys(credentials).length ? "PENDING" : "WARNING"]);
       await client.query("insert into audit_events(workspace_id,actor_type,actor_id,action,entity_type,entity_id,changes) values($1,'USER',$2,'connector.created','connector',$3,$4)", [workspaceId, DEMO_USER_ID, result.rows[0].id, JSON.stringify({ channel: input.channel, botSlug })]);

@@ -27,7 +27,7 @@ select b.workspace_id,
          when bool_or(c.channel = 'vk') then 'vk'
          else 'other'
        end,
-       '/' || replace(b.slug, '_', '-')
+       '/bot_crm/' || b.slug
 from bots b
 join connectors c on c.bot_id = b.id
 group by b.workspace_id, b.id, b.slug

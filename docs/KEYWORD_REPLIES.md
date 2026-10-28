@@ -33,6 +33,7 @@ BotCRM не отвечает пользователю сам. Сообщение
 CONTENT_PLATFORM_URL=https://content.example.ts.net
 CONTENT_PLATFORM_TOKEN=directus-server-token
 CONTENT_PLATFORM_YANDEX_TOKEN=yandex-disk-oauth-token
+CONTENT_PLATFORM_YANDEX_ROOT=/bot_crm
 CONTENT_PLATFORM_BINDINGS=[{"workspaceId":"00000000-0000-4000-8000-000000000001","botSlug":"vk_test_bot","contentBotKey":"vk-content-bot","label":"VK Content Bot","channel":"vk","yandexRoot":"/VK Content Bot"}]
 ```
 
@@ -45,7 +46,7 @@ CONTENT_PLATFORM_BINDINGS=[{"workspaceId":"00000000-0000-4000-8000-000000000001"
 - `contentBotKey` — поле `key` бота в коллекции `content_bots` Directus;
 - `label` — понятное название в интерфейсе;
 - `channel` — `vk`, `telegram`, `instagram` или `other`.
-- `yandexRoot` — корневая папка медиатеки этого бота на Яндекс Диске.
+- `yandexRoot` — нестандартная корневая папка медиатеки; обычно её указывать не требуется.
 
 `CONTENT_PLATFORM_YANDEX_TOKEN` остаётся только на API-сервере. Интерфейс получает список файлов и временные превью, но никогда не получает OAuth-токен.
 
@@ -53,8 +54,7 @@ CONTENT_PLATFORM_BINDINGS=[{"workspaceId":"00000000-0000-4000-8000-000000000001"
 
 ## Подключение процесса бота
 
-1. Подключите бота в разделе **Боты и каналы**. BotCRM автоматически создаст изолированное контентное пространство.
-   Для Яндекс Диска по умолчанию используется папка `/<slug-бота>`; существующие привязки сохраняют свой прежний путь.
+1. Подключите бота в разделе **Боты и каналы**. BotCRM автоматически создаст изолированное контентное пространство и папку `/bot_crm/<slug-бота>` на Яндекс Диске. Существующие привязки сохраняют свой прежний путь.
 2. Откройте **Автоответы**, выберите бота и нажмите **Токен для бота**.
 3. Сохраните показанный токен в окружение процесса как `BOTCRM_CONTENT_TOKEN` и укажите `BOTCRM_URL`.
 4. Бот обращается только к `/api/v1/bot-content/*`. Токен Directus ему больше не нужен.

@@ -117,6 +117,36 @@ test("workspace bindings never expose another workspace content bot", async () =
   }
 });
 
+test("content bot provisioning creates its Yandex Disk folder once", async () => {
+  const previous = { url: process.env.CONTENT_PLATFORM_URL, token: process.env.CONTENT_PLATFORM_TOKEN, yandex: process.env.CONTENT_PLATFORM_YANDEX_TOKEN, bindings: process.env.CONTENT_PLATFORM_BINDINGS, fetch: globalThis.fetch };
+  process.env.CONTENT_PLATFORM_URL = "https://content.internal";
+  process.env.CONTENT_PLATFORM_TOKEN = "server-secret";
+  process.env.CONTENT_PLATFORM_YANDEX_TOKEN = "disk-secret";
+  delete process.env.CONTENT_PLATFORM_BINDINGS;
+  const createdPaths: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.hostname === "content.internal") return new Response(JSON.stringify({ data: [{ id: 1, key: "new-content", name: "New Bot" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    assert.equal(init?.method, "PUT");
+    assert.equal(new Headers(init?.headers).get("authorization"), "OAuth disk-secret");
+    createdPaths.push(String(url.searchParams.get("path")));
+    return new Response(JSON.stringify({ href: "https://cloud-api.yandex.net/operation/1" }), { status: 201, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const service = new ContentPlatformService();
+    const binding = { workspaceId: "ws_demo", botSlug: "new_bot", contentBotKey: "new-content", channel: "vk" as const, yandexRoot: "/bot_crm/new_bot" };
+    await service.ensureContentBot(binding);
+    await service.ensureContentBot(binding);
+    assert.deepEqual(createdPaths, ["/bot_crm", "/bot_crm/new_bot"]);
+  } finally {
+    globalThis.fetch = previous.fetch;
+    if (previous.url === undefined) delete process.env.CONTENT_PLATFORM_URL; else process.env.CONTENT_PLATFORM_URL = previous.url;
+    if (previous.token === undefined) delete process.env.CONTENT_PLATFORM_TOKEN; else process.env.CONTENT_PLATFORM_TOKEN = previous.token;
+    if (previous.yandex === undefined) delete process.env.CONTENT_PLATFORM_YANDEX_TOKEN; else process.env.CONTENT_PLATFORM_YANDEX_TOKEN = previous.yandex;
+    if (previous.bindings === undefined) delete process.env.CONTENT_PLATFORM_BINDINGS; else process.env.CONTENT_PLATFORM_BINDINGS = previous.bindings;
+  }
+});
+
 test("media library reuses a Yandex file and protects media used by a reply", async () => {
   const previous = { url: process.env.CONTENT_PLATFORM_URL, token: process.env.CONTENT_PLATFORM_TOKEN, bindings: process.env.CONTENT_PLATFORM_BINDINGS, fetch: globalThis.fetch };
   process.env.CONTENT_PLATFORM_URL = "https://content.internal";

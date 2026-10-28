@@ -234,6 +234,7 @@ export class ContentPlatformService {
   private readonly yandexToken?: string;
   private readonly bindings: ContentPlatformBinding[];
   private readonly managedBindings = new Map<string, ContentPlatformBinding>();
+  private readonly ensuredYandexFolders = new Set<string>();
 
   constructor() {
     this.baseUrl = process.env.CONTENT_PLATFORM_URL?.replace(/\/+$/, "");
@@ -386,14 +387,54 @@ export class ContentPlatformService {
     this.managedBindings.set(`${binding.workspaceId}:${binding.botSlug}`, binding);
     const query = new URLSearchParams({ "filter[key][_eq]": binding.contentBotKey, limit: "1", fields: "*" });
     const [existing] = await this.items<DirectusRecord>("content_bots", query);
-    if (existing) return existing;
-    return this.createItem<DirectusRecord>("content_bots", {
+    const bot = existing ?? await this.createItem<DirectusRecord>("content_bots", {
       key: binding.contentBotKey,
       name: binding.label || binding.botSlug,
       platform: binding.channel || "other",
       status: "active",
       description: "Контентом управляет BotCRM",
     });
+    await this.ensureYandexFolder(binding);
+    return bot;
+  }
+
+  private async ensureYandexFolder(binding: ContentPlatformBinding) {
+    if (!this.yandexToken || !binding.yandexRoot) return;
+    const root = normalizeDiskPath(binding.yandexRoot);
+    if (this.ensuredYandexFolders.has(root)) return;
+    const segments = root.split("/").filter(Boolean);
+    let current = "";
+    for (const segment of segments) {
+      current += `/${segment}`;
+      const query = new URLSearchParams({ path: current });
+      let response: Response;
+      try {
+        response = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?${query.toString()}`, {
+          method: "PUT",
+          headers: { accept: "application/json", authorization: `OAuth ${this.yandexToken}` },
+          signal: AbortSignal.timeout(8_000),
+        });
+      } catch {
+        throw new DomainError(502, "Yandex Disk is temporarily unavailable", "yandex_disk_unavailable");
+      }
+      if (response.ok) continue;
+      if (response.status === 409) {
+        let metadata: Response;
+        try {
+          metadata = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?${query.toString()}&fields=type`, {
+            headers: { accept: "application/json", authorization: `OAuth ${this.yandexToken}` },
+            signal: AbortSignal.timeout(8_000),
+          });
+        } catch {
+          throw new DomainError(502, "Yandex Disk is temporarily unavailable", "yandex_disk_unavailable");
+        }
+        const payload = metadata.ok ? await metadata.json() as { type?: string } : {};
+        if (payload.type === "dir") continue;
+      }
+      if (response.status === 401 || response.status === 403) throw new DomainError(502, "Yandex Disk rejected its server credentials", "yandex_disk_authentication_failed");
+      throw new DomainError(502, `Yandex Disk could not create ${current}`, "yandex_disk_folder_creation_failed");
+    }
+    this.ensuredYandexFolders.add(root);
   }
 
   private async createItem<T extends DirectusRecord>(collection: string, body: Record<string, unknown>) {
