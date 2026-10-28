@@ -8,6 +8,18 @@
 
 - Публичная документация и материалы сообщества.
 
+## [0.4.0] — 2026-10-28
+
+### Added
+
+- Единый раздел автоответов для контентных ботов с текстом, медиа, кнопками и fallback.
+- Изолированные профили и персональные токены BotCRM Content API.
+- Автоматическое создание папок ботов внутри `/bot_crm` на Яндекс Диске.
+
+### Changed
+
+- Directus используется как внутреннее хранилище и больше не выдаёт административный доступ процессам ботов.
+
 ## [0.1.0] — 2026-08-23
 
 ### Added
@@ -20,5 +32,6 @@
 - TypeScript и Python SDK, OpenAPI и тестовый Telegram-бот.
 - Production Docker Compose, Caddy HTTPS, backup/restore и monitoring.
 
-[Unreleased]: https://github.com/Evgenykravchenko/botcrm/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Evgenykravchenko/botcrm/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Evgenykravchenko/botcrm/compare/v0.3.2...v0.4.0
 [0.1.0]: https://github.com/Evgenykravchenko/botcrm/releases/tag/v0.1.0
