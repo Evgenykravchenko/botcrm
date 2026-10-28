@@ -92,6 +92,7 @@ services:
   api:
     <<: *app-common
     build: { context: .., dockerfile: infra/Dockerfile, target: api }
+    networks: [backend, content_platform]
     environment:
       PORT: "4100"
       DATABASE_URL: postgresql://botcrm:${POSTGRES_PASSWORD}@postgres:5432/botcrm
@@ -221,6 +222,9 @@ secrets:
 networks:
   backend:
     driver: bridge
+  content_platform:
+    external: true
+    name: ${CONTENT_PLATFORM_NETWORK:-bot_platform_backend}
 
 volumes:
   postgres_data:

@@ -30,10 +30,11 @@ BotCRM не отвечает пользователю сам. Сообщение
 В окружение API добавьте:
 
 ```dotenv
-CONTENT_PLATFORM_URL=https://content.example.ts.net
+CONTENT_PLATFORM_URL=http://directus:8055
 CONTENT_PLATFORM_TOKEN=directus-server-token
 CONTENT_PLATFORM_YANDEX_TOKEN=yandex-disk-oauth-token
 CONTENT_PLATFORM_YANDEX_ROOT=/bot_crm
+CONTENT_PLATFORM_NETWORK=bot_platform_backend
 CONTENT_PLATFORM_BINDINGS=[{"workspaceId":"00000000-0000-4000-8000-000000000001","botSlug":"vk_test_bot","contentBotKey":"vk-content-bot","label":"VK Content Bot","channel":"vk","yandexRoot":"/VK Content Bot"}]
 ```
 
@@ -49,6 +50,8 @@ CONTENT_PLATFORM_BINDINGS=[{"workspaceId":"00000000-0000-4000-8000-000000000001"
 - `yandexRoot` — нестандартная корневая папка медиатеки; обычно её указывать не требуется.
 
 `CONTENT_PLATFORM_YANDEX_TOKEN` остаётся только на API-сервере. Интерфейс получает список файлов и временные превью, но никогда не получает OAuth-токен.
+
+В production BotCRM обращается к Directus по общей внутренней Docker-сети. Так запросы не выходят в Tailscale Funnel и не зависят от публичного маршрута. `CONTENT_PLATFORM_NETWORK` должна совпадать с именем backend-сети стека Content Platform.
 
 Один workspace не может открыть контент другого, даже если пользователь подставит чужой `botSlug` в запрос вручную.
 
