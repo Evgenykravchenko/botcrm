@@ -8,6 +8,13 @@
 
 - Публичная документация и материалы сообщества.
 
+## [0.4.1] — 2026-10-28
+
+### Fixed
+
+- Существующие папки Яндекс Диска сначала проверяются чтением и не требуют права записи для повторного подключения.
+- Для отсутствующей папки возвращается отдельная ошибка, если OAuth-токен не имеет права создавать каталоги.
+
 ## [0.4.0] — 2026-10-28
 
 ### Added
@@ -32,6 +39,7 @@
 - TypeScript и Python SDK, OpenAPI и тестовый Telegram-бот.
 - Production Docker Compose, Caddy HTTPS, backup/restore и monitoring.
 
-[Unreleased]: https://github.com/Evgenykravchenko/botcrm/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Evgenykravchenko/botcrm/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Evgenykravchenko/botcrm/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Evgenykravchenko/botcrm/compare/v0.3.2...v0.4.0
 [0.1.0]: https://github.com/Evgenykravchenko/botcrm/releases/tag/v0.1.0
