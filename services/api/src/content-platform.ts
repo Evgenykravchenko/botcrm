@@ -407,9 +407,25 @@ export class ContentPlatformService {
     for (const segment of segments) {
       current += `/${segment}`;
       const query = new URLSearchParams({ path: current });
-      let response: Response;
+      let metadata: Response;
       try {
-        response = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?${query.toString()}`, {
+        metadata = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?${query.toString()}&fields=type`, {
+          headers: { accept: "application/json", authorization: `OAuth ${this.yandexToken}` },
+          signal: AbortSignal.timeout(8_000),
+        });
+      } catch {
+        throw new DomainError(502, "Yandex Disk is temporarily unavailable", "yandex_disk_unavailable");
+      }
+      if (metadata.ok) {
+        const payload = await metadata.json() as { type?: string };
+        if (payload.type === "dir") continue;
+        throw new DomainError(409, `Yandex Disk path ${current} is not a folder`, "yandex_disk_path_conflict");
+      }
+      if (metadata.status === 401 || metadata.status === 403) throw new DomainError(502, "Yandex Disk rejected its server credentials", "yandex_disk_authentication_failed");
+      if (metadata.status !== 404) throw new DomainError(502, `Yandex Disk could not inspect ${current}`, "yandex_disk_request_failed");
+      let creation: Response;
+      try {
+        creation = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?${query.toString()}`, {
           method: "PUT",
           headers: { accept: "application/json", authorization: `OAuth ${this.yandexToken}` },
           signal: AbortSignal.timeout(8_000),
@@ -417,21 +433,8 @@ export class ContentPlatformService {
       } catch {
         throw new DomainError(502, "Yandex Disk is temporarily unavailable", "yandex_disk_unavailable");
       }
-      if (response.ok) continue;
-      if (response.status === 409) {
-        let metadata: Response;
-        try {
-          metadata = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?${query.toString()}&fields=type`, {
-            headers: { accept: "application/json", authorization: `OAuth ${this.yandexToken}` },
-            signal: AbortSignal.timeout(8_000),
-          });
-        } catch {
-          throw new DomainError(502, "Yandex Disk is temporarily unavailable", "yandex_disk_unavailable");
-        }
-        const payload = metadata.ok ? await metadata.json() as { type?: string } : {};
-        if (payload.type === "dir") continue;
-      }
-      if (response.status === 401 || response.status === 403) throw new DomainError(502, "Yandex Disk rejected its server credentials", "yandex_disk_authentication_failed");
+      if (creation.ok || creation.status === 409) continue;
+      if (creation.status === 401 || creation.status === 403) throw new DomainError(502, "Yandex Disk token cannot create folders", "yandex_disk_write_permission_required");
       throw new DomainError(502, `Yandex Disk could not create ${current}`, "yandex_disk_folder_creation_failed");
     }
     this.ensuredYandexFolders.add(root);
