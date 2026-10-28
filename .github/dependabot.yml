@@ -16,11 +16,15 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@nestjs/common"
         update-types: ["version-update:semver-major"]
+      - dependency-name: "@nestjs/core"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "@nestjs/platform-fastify"
         update-types: ["version-update:semver-major"]
       - dependency-name: "@nestjs/swagger"
         update-types: ["version-update:semver-major"]
       - dependency-name: bullmq
+        update-types: ["version-update:semver-major"]
+      - dependency-name: dotenv
         update-types: ["version-update:semver-major"]
       - dependency-name: eslint
         update-types: ["version-update:semver-major"]
@@ -28,7 +32,7 @@ updates:
         # vinext 1.3 emits Cloudflare-only module URLs during SSR in the
         # current self-hosted Node runtime. Keep the validated beta until the
         # runtime migration is handled separately.
-        versions: [">=1.0.0"]
+        versions: [">=1.0.0-beta.9"]
       - dependency-name: lucide-react
         update-types: ["version-update:semver-major"]
       - dependency-name: undici
