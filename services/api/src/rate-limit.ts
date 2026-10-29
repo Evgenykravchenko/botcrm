@@ -95,12 +95,16 @@ export class RateLimitGuard implements CanActivate, OnModuleInit, OnModuleDestro
       buckets.push({ scope: "login-ip", identity: ip, max: positiveInteger(process.env.LOGIN_ROUTE_RATE_LIMIT_IP_MAX, 20), windowSeconds: positiveInteger(process.env.LOGIN_ROUTE_RATE_LIMIT_IP_WINDOW_SECONDS, 60) });
       const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
       const workspace = typeof request.body?.workspace === "string" ? request.body.workspace.trim().toLowerCase() : "ws_demo";
-      if (email) buckets.push({ scope: "login-account", identity: `${workspace}:${email}`, max: positiveInteger(process.env.LOGIN_ROUTE_RATE_LIMIT_EMAIL_MAX, 10), windowSeconds: positiveInteger(process.env.LOGIN_ROUTE_RATE_LIMIT_EMAIL_WINDOW_SECONDS, 900) });
+      // Anonymous failures must not lock the account for clients on other addresses.
+      if (email) buckets.push({ scope: "login-pair", identity: JSON.stringify([ip, workspace, email]), max: positiveInteger(process.env.LOGIN_ROUTE_RATE_LIMIT_PAIR_MAX, 10), windowSeconds: positiveInteger(process.env.LOGIN_ROUTE_RATE_LIMIT_PAIR_WINDOW_SECONDS, 900) });
     } else if (path.includes("/bot-content/")) {
+      // Always bound pre-authentication work, even when callers rotate arbitrary credentials.
+      buckets.push({ scope: "bot-content-ip", identity: ip, max: positiveInteger(process.env.BOT_CONTENT_RATE_LIMIT_IP_MAX, 3000), windowSeconds: positiveInteger(process.env.BOT_CONTENT_RATE_LIMIT_WINDOW_SECONDS, 60) });
       const authorization = request.headers?.authorization;
       const contentToken = request.headers?.["x-bot-content-token"];
+      const bearer = Array.isArray(authorization) ? authorization[0] : authorization;
       const suppliedCredential = (Array.isArray(contentToken) ? contentToken[0] : contentToken)
-        || (Array.isArray(authorization) ? authorization[0] : authorization);
+        || (bearer?.startsWith("Bearer ") ? bearer.slice(7) : undefined);
       const credential = suppliedCredential || ip;
       buckets.push({ scope: "bot-content", identity: credential, max: positiveInteger(process.env.BOT_CONTENT_RATE_LIMIT_MAX, 1200), windowSeconds: positiveInteger(process.env.BOT_CONTENT_RATE_LIMIT_WINDOW_SECONDS, 60) });
     } else if (path.includes("/webhooks/")) {
