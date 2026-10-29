@@ -1,6 +1,118 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ContentPlatformService, validateContentMediaInput, validateKeywordReplyInput } from "./content-platform.js";
+import { RealtimeService } from "./realtime.js";
+import { filter, firstValueFrom, timeout } from "rxjs";
+
+test("media readiness respects Telegram file IDs and Instagram delivery expiry", async () => {
+  const keys = ["CONTENT_PLATFORM_URL", "CONTENT_PLATFORM_TOKEN", "CONTENT_PLATFORM_BINDINGS"] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const originalFetch = globalThis.fetch;
+  process.env.CONTENT_PLATFORM_URL = "https://content.internal";
+  process.env.CONTENT_PLATFORM_TOKEN = "test-content-token";
+  const media = { id: 7, status: "ready", telegram_file_id: "" };
+  let expiresAt = "2000-01-01T00:00:00Z";
+  globalThis.fetch = (async (input) => {
+    const collection = new URL(String(input)).pathname.split("/")[2];
+    return Response.json({ data: collection === "content_bots" ? [{ id: 1 }]
+      : collection === "media_assets" ? [media]
+        : collection === "media_deliveries" ? [{ id: 2, media: 7, status: "ready", external_reference: "test-instagram-reference", expires_at: expiresAt }] : [] });
+  }) as typeof fetch;
+  try {
+    for (const channel of ["telegram", "instagram"]) {
+      process.env.CONTENT_PLATFORM_BINDINGS = JSON.stringify([{ workspaceId: "ws_test", botSlug: "video_bot", contentBotKey: "video-bot", channel }]);
+      const service = new ContentPlatformService();
+      assert.equal((await service.listMedia("ws_test", "video_bot"))[0].canAttach, false);
+      if (channel === "telegram") media.telegram_file_id = "test-telegram-file";
+      else expiresAt = "2099-01-01T00:00:00Z";
+      assert.equal((await service.listMedia("ws_test", "video_bot"))[0].canAttach, true);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of keys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
+  }
+});
+
+test("media changes reach another API instance through PostgreSQL", { skip: !process.env.DATABASE_URL }, async () => {
+  const publisher = new RealtimeService();
+  const subscriber = new RealtimeService();
+  try {
+    await publisher.onModuleInit();
+    await subscriber.onModuleInit();
+    const change = firstValueFrom(subscriber.stream("ws_media_test").pipe(filter((event) => event.type === "change"), timeout(3_000)));
+    await publisher.notifyContentMedia("ws_media_test", "video_bot");
+    assert.equal(((await change).data as { entityId: string }).entityId, "video_bot");
+  } finally { await Promise.all([publisher.onModuleDestroy(), subscriber.onModuleDestroy()]); }
+});
+
+test("unprepared media cannot be attached through create or update, including a forged ready status", async () => {
+  const envKeys = ["CONTENT_PLATFORM_URL", "CONTENT_PLATFORM_TOKEN", "CONTENT_PLATFORM_BINDINGS"] as const;
+  const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+  const originalFetch = globalThis.fetch;
+  process.env.CONTENT_PLATFORM_URL = "https://content.internal";
+  process.env.CONTENT_PLATFORM_TOKEN = "test-content-token";
+  process.env.CONTENT_PLATFORM_BINDINGS = JSON.stringify([{ workspaceId: "ws_test", botSlug: "video_bot", contentBotKey: "video-bot", channel: "vk" }]);
+  const media: Record<string, unknown> = { id: 7, bot: 1, name: "video.mov", kind: "video", yandex_path: "/Bot/video.mov", status: "queued" };
+  let writes = 0;
+  const events: Array<[string, string]> = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input));
+    const collection = url.pathname.split("/")[2];
+    if (init?.method && init.method !== "GET") {
+      writes++;
+      const body = init.body ? JSON.parse(String(init.body)) : {};
+      if (collection === "media_assets") Object.assign(media, body);
+      return Response.json({ data: { id: collection === "responses" ? 3 : 9, ...body } });
+    }
+    return Response.json({ data: collection === "content_bots" ? [{ id: 1 }]
+      : collection === "media_assets" ? [media]
+        : collection === "keywords" ? [{ id: 2, bot: 1, phrase: "video", response: 3 }]
+          : collection === "responses" ? [{ id: 3, bot: 1, name: "Video", status: "published" }]
+            : [] });
+  }) as typeof fetch;
+  try {
+    const service = new ContentPlatformService({ notifyContentMedia: async (workspace, slug) => { events.push([workspace, slug]); } });
+    const reply = { phrase: "video", response: { name: "Video", status: "published" as const, blocks: [{ kind: "video" as const, mediaId: 7 }] } };
+    for (const status of ["draft", "queued", "processing", "error", "ready"]) {
+      media.status = status;
+      assert.equal((await service.listMedia("ws_test", "video_bot"))[0].canAttach, false);
+      for (const save of [() => service.createRule("ws_test", "video_bot", reply), () => service.updateRule("ws_test", "video_bot", 2, reply)]) {
+        await assert.rejects(save, (error: unknown) => error instanceof Error && "code" in error && error.code === "content_media_not_ready");
+      }
+    }
+    assert.equal(writes, 0, "reject before mutating any response or keyword");
+    await assert.rejects(() => service.createRule("ws_test", "video_bot", { ...reply, response: { ...reply.response, blocks: [{ kind: "video", mediaId: 999 }] } }), (error: unknown) => error instanceof Error && "code" in error && error.code === "invalid_response_media");
+    await service.runtimeUpdateMedia("ws_test", "video_bot", 7, { status: "ready", vk_attachment: "video1_2", error_message: null });
+    assert.deepEqual(events, [["ws_test", "video_bot"]]);
+    assert.equal((await service.listMedia("ws_test", "video_bot"))[0].canAttach, true);
+    await service.createRule("ws_test", "video_bot", reply);
+    await service.updateRule("ws_test", "video_bot", 2, reply);
+    await service.updateMedia("ws_test", "video_bot", 7, { name: "new.mov", kind: "video", yandexPath: "/Bot/new.mov", status: "ready" });
+    assert.equal(media.status, "queued");
+    assert.equal(media.vk_attachment, null);
+    assert.equal((await service.listMedia("ws_test", "video_bot"))[0].canAttach, false, "a replacement file must be prepared again");
+    const unavailableRealtime = new ContentPlatformService({ notifyContentMedia: async () => { throw new Error("offline"); } });
+    await unavailableRealtime.runtimeUpdateMedia("ws_test", "video_bot", 7, { status: "processing" });
+    assert.equal(media.status, "processing", "notification failure must not fail a worker's completed write");
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of envKeys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
+  }
+});
+
+test("media live events contain no file data and stay inside their workspace", async () => {
+  const service = new RealtimeService();
+  const first: unknown[] = [];
+  const other: unknown[] = [];
+  const subscriptions = [service.stream("ws_first").subscribe((event) => { if (event.type === "change") first.push(event.data); }), service.stream("ws_other").subscribe((event) => { if (event.type === "change") other.push(event.data); })];
+  try {
+    await service.notifyContentMedia("ws_first", "video_bot");
+    assert.equal(first.length, 1);
+    assert.equal(other.length, 0);
+    assert.deepEqual(Object.keys(first[0] as object).sort(), ["type", "workspaceId", "entity", "entityId", "operation", "occurredAt"].sort());
+    assert.equal((first[0] as { entity: string }).entity, "content_media");
+  } finally { subscriptions.forEach((subscription) => subscription.unsubscribe()); }
+});
 
 test("keyword replies normalize editor input and reject unsafe buttons", () => {
   const result = validateKeywordReplyInput({

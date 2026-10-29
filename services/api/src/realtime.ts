@@ -34,6 +34,12 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async notifyContentMedia(workspaceId: string, botSlug: string, operation: RealtimeChange["operation"] = "update") {
+    const event: RealtimeChange = { workspaceId, entity: "content_media", entityId: botSlug, operation, occurredAt: new Date().toISOString() };
+    if (this.client) await this.client.query("SELECT pg_notify('botcrm_realtime', $1)", [JSON.stringify(event)]);
+    else this.changes.next(event);
+  }
+
   stream(workspaceId: string): Observable<MessageEvent> {
     const ready = of<MessageEvent>({ type: "ready", data: { type: "ready", occurredAt: new Date().toISOString() } });
     const changes = this.changes.pipe(
