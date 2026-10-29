@@ -36,6 +36,7 @@ export interface ApiAttachment {
   mimeType: string;
   byteSize: number;
   createdAt: string;
+  previewUrl?: string;
 }
 
 export interface ApiMediaUpload extends ApiAttachment {

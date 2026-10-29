@@ -10,6 +10,11 @@ interface DeliveryAttachment { url: string; mimeType: string; filename: string }
 interface DeliveryButton { id?: string; text: string; type: "callback" | "url"; value: string; row: number }
 class MessageDeliveryError extends Error { constructor(message: string, readonly permanent = false, readonly retryAfterMs?: number) { super(message); } }
 
+export function vkNativeAttachmentParam(refs: string[]) {
+  if (refs.length > 10 || refs.some((item) => !/^(?:photo|video|audio|doc|wall|market|poll)-?\d+_\d+(?:_[A-Za-z0-9_-]+)?$/.test(item))) throw new MessageDeliveryError("VK native attachment reference is invalid", true);
+  return refs.join(",");
+}
+
 async function channelRequest(url: string, init: RequestInit) {
   const response = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000) });
   const payload = await response.json().catch(() => ({})) as Record<string, any>;
@@ -28,7 +33,7 @@ function buttonRows(buttons: DeliveryButton[]) {
   return [...rows.entries()].sort(([left], [right]) => left - right).map(([, row]) => row);
 }
 
-async function sendOfficial(channel: string, credentials: Record<string, any>, chatId: string, text: string, attachments: DeliveryAttachment[], buttons: DeliveryButton[] = []) {
+async function sendOfficial(channel: string, credentials: Record<string, any>, chatId: string, text: string, attachments: DeliveryAttachment[], buttons: DeliveryButton[] = [], nativeAttachmentRefs: string[] = []) {
   const responses: Record<string, any>[] = [];
   if (channel === "telegram") {
     const token = credentials.botToken ?? credentials.bot_token; if (!token) throw new MessageDeliveryError("Telegram bot token is not configured", true);
@@ -59,9 +64,10 @@ async function sendOfficial(channel: string, credentials: Record<string, any>, c
     }
   } else if (channel === "vk") {
     if (attachments.length) throw new MessageDeliveryError("VK attachments require the channel upload flow and cannot be sent as generic files", true);
+    const nativeAttachmentParam = vkNativeAttachmentParam(nativeAttachmentRefs);
     const token = credentials.accessToken ?? credentials.access_token; if (!token) throw new MessageDeliveryError("VK access token is not configured", true);
-    const keyboard = buttons.length ? JSON.stringify({ inline: true, buttons: buttonRows(buttons).map((row) => row.map((button) => button.type === "url" ? { action: { type: "open_link", link: button.value, label: button.text } } : { action: { type: "callback", label: button.text, payload: JSON.stringify({ value: button.value }) }, color: "primary" })) }) : undefined;
-    responses.push(await channelRequest("https://api.vk.com/method/messages.send", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ access_token: token, v: credentials.apiVersion ?? "5.199", peer_id: chatId, random_id: String(Date.now()), message: text, ...(keyboard ? { keyboard } : {}) }) }));
+    const keyboard = buttons.length ? JSON.stringify({ inline: true, buttons: buttonRows(buttons).map((row) => row.map((button) => button.type === "url" ? { action: { type: "open_link", link: button.value, label: button.text } } : { action: { type: "text", label: button.text, payload: JSON.stringify({ value: button.value }) }, color: "primary" })) }) : undefined;
+    responses.push(await channelRequest("https://api.vk.com/method/messages.send", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ access_token: token, v: credentials.apiVersion ?? "5.199", peer_id: chatId, random_id: String(Date.now()), message: text, ...(nativeAttachmentParam ? { attachment: nativeAttachmentParam } : {}), ...(keyboard ? { keyboard } : {}) }) }));
   } else if (channel === "avito") {
     if (attachments.length || buttons.length) throw new MessageDeliveryError("Avito campaign media and buttons are unavailable for this connector", true);
     const token = credentials.accessToken ?? credentials.access_token; const accountId = credentials.accountId ?? credentials.userId; if (!token || !accountId) throw new MessageDeliveryError("Avito account and access token are not configured", true);
@@ -88,7 +94,7 @@ export function messageProcessor(pool: Pool) {
       if (["SENT", "DELIVERED", "READ"].includes(row.status)) { await client.query("commit"); transactionOpen = false; return { skipped: "already_sent" }; }
       try {
         const attachments: DeliveryAttachment[] = await Promise.all((row.attachments as Array<{ objectKey: string; filename: string; mimeType: string }>).map(async (item) => ({ url: await attachmentUrl(item.objectKey, item.filename), filename: item.filename, mimeType: item.mimeType })));
-        const sent = await sendOfficial(row.channel, decryptCredentials(row.encrypted_credentials), row.external_chat_id, row.text_content, attachments, row.payload?.buttons ?? []);
+        const sent = await sendOfficial(row.channel, decryptCredentials(row.encrypted_credentials), row.external_chat_id, row.text_content, attachments, row.payload?.buttons ?? [], row.payload?.nativeAttachmentRefs ?? []);
         await client.query("update messages set status='SENT',external_id=coalesce($2,external_id),error_code=null,error_message=null where id=$1", [row.id, sent.externalId ?? null]);
         await client.query("insert into audit_events(workspace_id,actor_type,action,entity_type,entity_id,changes) values($1,'SERVICE','message.sent','message',$2,$3)", [bullJob.data.workspaceId, row.id, JSON.stringify({ channel: row.channel, externalId: sent.externalId, attachmentCount: attachments.length })]);
         await client.query("commit"); transactionOpen = false; return sent.response;

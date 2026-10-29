@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Pool, PoolClient } from "pg";
-import { AttachmentRecord, CampaignRecord, Channel, ControlMode, DealRecord, DomainError, MessageRecord, NormalizedEvent } from "./core.js";
+import { AttachmentRecord, CampaignRecord, Channel, ControlMode, DealRecord, DeliveryButton, DomainError, MessageRecord, NormalizedEvent } from "./core.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MediaObjectHead, MediaUploadInput } from "./media.js";
 import { AutomationAction, AutomationRuleInput, automationMatches, isUuid, validateAutomationRule } from "./automation.js";
 import { decryptSecret, encryptSecret } from "./secrets.js";
@@ -12,6 +12,8 @@ import { normalizeBotSlug } from "./input-normalization.js";
 
 const DEMO_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001";
 const DEMO_USER_ID = "00000000-0000-4000-8000-000000000002";
+const MAX_NATIVE_ATTACHMENTS_PER_MESSAGE = 10;
+const VK_NATIVE_ATTACHMENT_RE = /^(?:photo|video|audio|doc|wall|market|poll)-?\d+_\d+(?:_[A-Za-z0-9_-]+)?$/;
 
 function defaultContentYandexRoot(botSlug: string) {
   const configuredRoot = String(process.env.CONTENT_PLATFORM_YANDEX_ROOT || "/bot_crm").trim().replace(/\/+$/, "");
@@ -195,8 +197,22 @@ export class PostgresStore {
     return { id: row.id, filename: row.filename || "attachment", mimeType: row.mime_type, byteSize: Number(row.byte_size), createdAt: new Date(row.created_at).toISOString() };
   }
 
+  private mapExternalAttachments(row: Record<string, any>): AttachmentRecord[] {
+    const source = Array.isArray(row.payload?.attachments) ? row.payload.attachments : [];
+    return source.flatMap((item: unknown, index: number) => {
+      if (!item || typeof item !== "object") return [];
+      const value = item as Record<string, unknown>;
+      const previewUrl = typeof value.url === "string" ? value.url.trim() : "";
+      if (!/^https?:\/\//i.test(previewUrl)) return [];
+      const sourceType = typeof value.type === "string" ? value.type.toLowerCase() : "file";
+      const mimeType = sourceType.includes("/") ? sourceType : sourceType === "photo" || sourceType === "image" ? "image/jpeg" : sourceType === "audio" || sourceType === "audio_message" ? "audio/ogg" : sourceType === "video" ? "text/uri-list" : "application/octet-stream";
+      const label = sourceType === "photo" || sourceType === "image" ? "Фотография VK" : sourceType === "audio" || sourceType === "audio_message" ? "Голосовое сообщение VK" : sourceType === "video" ? "Видео VK" : "Вложение VK";
+      return [{ id: `external:${row.id}:${index}`, filename: label, mimeType, byteSize: 0, createdAt: new Date(row.occurred_at).toISOString(), previewUrl }];
+    });
+  }
+
   private mapMessage(row: Record<string, any>, attachments: AttachmentRecord[] = []): MessageRecord {
-    return { id: row.id, eventId: row.event_id ?? undefined, conversationId: row.conversation_id, direction: row.direction === "INBOUND" ? "inbound" : row.direction === "OUTBOUND" ? "outbound" : "system", actor: row.actor_type, text: row.text_content, status: String(row.status).toLowerCase() as MessageRecord["status"], externalId: row.external_id ?? undefined, attachments, createdAt: new Date(row.occurred_at).toISOString() };
+    return { id: row.id, eventId: row.event_id ?? undefined, conversationId: row.conversation_id, direction: row.direction === "INBOUND" ? "inbound" : row.direction === "OUTBOUND" ? "outbound" : "system", actor: row.actor_type, text: row.text_content, status: String(row.status).toLowerCase() as MessageRecord["status"], externalId: row.external_id ?? undefined, attachments: [...attachments, ...this.mapExternalAttachments(row)], createdAt: new Date(row.occurred_at).toISOString() };
   }
   private mapMediaUpload(row: Record<string, any>) {
     return { id: row.id, filename: row.filename, mimeType: row.mime_type, byteSize: Number(row.byte_size), sha256: row.sha256 ?? undefined, status: String(row.status).toLowerCase(), createdAt: new Date(row.created_at).toISOString(), expiresAt: new Date(row.expires_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined };
@@ -366,11 +382,14 @@ export class PostgresStore {
     } catch (error) { await client.query("rollback"); throw error; } finally { client.release(); }
   }
 
-  async sendMessage(input: { conversationId: string; actor: "bot" | "operator"; text: string; idempotencyKey: string; attachmentIds?: string[]; buttons?: CampaignButton[] }, workspace = "ws_demo") {
+  async sendMessage(input: { conversationId: string; actor: "bot" | "operator"; text: string; idempotencyKey: string; attachmentIds?: string[]; nativeAttachmentRefs?: string[]; buttons?: DeliveryButton[] }, workspace = "ws_demo") {
     if (!input.idempotencyKey) throw new DomainError(400, "Idempotency-Key is required", "idempotency_required");
     const attachmentIds = [...new Set(input.attachmentIds ?? [])];
-    if (!input.text.trim() && !attachmentIds.length) throw new DomainError(400, "Message text or attachment is required", "empty_message");
+    const nativeAttachmentRefs = [...new Set((input.nativeAttachmentRefs ?? []).map((item) => item.trim()).filter(Boolean))];
+    if (!input.text.trim() && !attachmentIds.length && !nativeAttachmentRefs.length) throw new DomainError(400, "Message text or attachment is required", "empty_message");
     if (attachmentIds.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new DomainError(400, `A message can contain at most ${MAX_ATTACHMENTS_PER_MESSAGE} attachments`, "too_many_attachments");
+    if (nativeAttachmentRefs.length > MAX_NATIVE_ATTACHMENTS_PER_MESSAGE) throw new DomainError(400, `A message can contain at most ${MAX_NATIVE_ATTACHMENTS_PER_MESSAGE} native attachments`, "too_many_native_attachments");
+    if (nativeAttachmentRefs.some((item) => !VK_NATIVE_ATTACHMENT_RE.test(item))) throw new DomainError(400, "A native attachment reference is invalid", "invalid_native_attachment");
     const client = await this.pool.connect();
     try {
       await client.query("begin");
@@ -378,6 +397,7 @@ export class PostgresStore {
       const conversation = await client.query("select * from conversations where id=$1 and workspace_id=$2 for share", [input.conversationId, workspaceId]);
       if (!conversation.rowCount) throw new DomainError(404, "Conversation not found", "conversation_not_found");
       if (input.actor === "bot" && conversation.rows[0].control_mode !== "BOT") throw new DomainError(409, "Bot is not in control of this conversation", "bot_not_in_control");
+      if (nativeAttachmentRefs.length && conversation.rows[0].channel !== "vk") throw new DomainError(400, "Native VK attachments can only be sent to a VK conversation", "native_attachment_channel_mismatch");
       const duplicate = await client.query("select * from messages where workspace_id=$1 and event_id=$2", [workspaceId, input.idempotencyKey]);
       if (duplicate.rowCount) {
         const existingAttachments = await client.query("select * from attachments where message_id=$1 order by created_at,id", [duplicate.rows[0].id]);
@@ -391,7 +411,7 @@ export class PostgresStore {
         uploads = uploadResult.rows;
         if (uploads.length !== attachmentIds.length || uploads.some((row) => !["UPLOADED", "ATTACHED"].includes(row.status))) throw new DomainError(409, "Every attachment must be uploaded and belong to this workspace", "attachment_not_ready");
       }
-      const result = await client.query("insert into messages(workspace_id,conversation_id,event_id,direction,actor_type,text_content,payload,status,occurred_at) values($1,$2,$3,'OUTBOUND',$4,$5,$6,'QUEUED',now()) returning *", [workspaceId, input.conversationId, input.idempotencyKey, input.actor, input.text.trim(), JSON.stringify({ buttons: input.buttons ?? [] })]);
+      const result = await client.query("insert into messages(workspace_id,conversation_id,event_id,direction,actor_type,text_content,payload,status,occurred_at) values($1,$2,$3,'OUTBOUND',$4,$5,$6,'QUEUED',now()) returning *", [workspaceId, input.conversationId, input.idempotencyKey, input.actor, input.text.trim(), JSON.stringify({ buttons: input.buttons ?? [], nativeAttachmentRefs })]);
       const attached: AttachmentRecord[] = [];
       for (const upload of uploads) {
         const attachment = await client.query("insert into attachments(workspace_id,message_id,object_key,filename,mime_type,byte_size,sha256) values($1,$2,$3,$4,$5,$6,$7) returning *", [workspaceId, result.rows[0].id, upload.object_key, upload.filename, upload.mime_type, upload.byte_size, upload.sha256]);

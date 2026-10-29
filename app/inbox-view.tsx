@@ -173,10 +173,10 @@ function MessageAttachment({ attachment }: { attachment: ApiAttachment & { previ
     void botcrmApi.attachmentUrl(attachment.id).then((result) => { if (active) setUrl(result.url); }).catch(() => { if (active) setFailed(true); });
     return () => { active = false; };
   }, [attachment.id, attachment.previewUrl]);
-  if (attachment.mimeType.startsWith("image/")) return <a className="attachment-card image" href={url || undefined} target="_blank" rel="noreferrer">{url ? <img src={url} alt={attachment.filename} /> : <span className="attachment-loading"><RefreshCw className="spin" size={18} />Загрузка…</span>}<small>{attachment.filename} · {formatBytes(attachment.byteSize)}</small></a>;
+  if (attachment.mimeType.startsWith("image/")) return <a className="attachment-card image" href={url || undefined} target="_blank" rel="noreferrer">{url ? <img src={url} alt={attachment.filename} /> : <span className="attachment-loading"><RefreshCw className="spin" size={18} />Загрузка…</span>}<small>{attachment.filename}{attachment.byteSize > 0 ? ` · ${formatBytes(attachment.byteSize)}` : ""}</small></a>;
   if (attachment.mimeType.startsWith("video/") && url) return <div className="attachment-card media"><video controls preload="metadata" src={url} /><small>{attachment.filename}</small></div>;
   if (attachment.mimeType.startsWith("audio/") && url) return <div className="attachment-card audio"><audio controls preload="metadata" src={url} /><small>{attachment.filename}</small></div>;
-  return <a className={`attachment-card file ${failed ? "failed" : ""}`} href={url || undefined} target="_blank" rel="noreferrer"><span><Paperclip size={18} /></span><div><b>{attachment.filename}</b><small>{failed ? "Ссылка недоступна" : `${formatBytes(attachment.byteSize)} · ${attachment.mimeType}`}</small></div></a>;
+  return <a className={`attachment-card file ${failed ? "failed" : ""}`} href={url || undefined} target="_blank" rel="noreferrer"><span><Paperclip size={18} /></span><div><b>{attachment.filename}</b><small>{failed ? "Ссылка недоступна" : attachment.byteSize > 0 ? `${formatBytes(attachment.byteSize)} · ${attachment.mimeType}` : "Открыть вложение"}</small></div></a>;
 }
 
 function ControlButton({ mode, setMode }: { mode: ControlMode; setMode: (mode: ControlMode) => void }) {
