@@ -45,7 +45,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename
   } else {
     try {
       const { root } = await configureYandex({ envPath: resolve(envPath), tokenPath: resolve(tokenPath) });
-      console.log(`Yandex Disk application folder configured: ${root}. Existing bot libraries must be migrated before deploying.`);
+      console.log(`Yandex Disk application folder configured: ${root}. Existing media files and stored media paths are not changed.`);
     } catch (error) { console.error(error.message); process.exitCode = 1; }
   }
 }
