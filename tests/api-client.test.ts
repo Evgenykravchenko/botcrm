@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { ApiError, apiRetryAt, botcrmApi, setAuthToken, subscribeToApiRateLimit, subscribeToRealtime } from "../app/api-client.ts";
+import { ApiError, apiRetryAt, botcrmApi, setAuthToken, subscribeToApiRateLimit, subscribeToRealtime } from "../app/api-client.js";
 
 const originalFetch = globalThis.fetch;
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
