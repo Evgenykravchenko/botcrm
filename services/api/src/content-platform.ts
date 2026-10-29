@@ -232,6 +232,8 @@ export class ContentPlatformService {
   private readonly baseUrl?: string;
   private readonly token?: string;
   private readonly yandexToken?: string;
+  private readonly yandexAppFolderOnly: boolean;
+  private yandexAppRoot?: Promise<string>;
   private readonly bindings: ContentPlatformBinding[];
   private readonly managedBindings = new Map<string, ContentPlatformBinding>();
   private readonly ensuredYandexFolders = new Set<string>();
@@ -240,6 +242,7 @@ export class ContentPlatformService {
     this.baseUrl = process.env.CONTENT_PLATFORM_URL?.replace(/\/+$/, "");
     this.token = process.env.CONTENT_PLATFORM_TOKEN;
     this.yandexToken = process.env.CONTENT_PLATFORM_YANDEX_TOKEN;
+    this.yandexAppFolderOnly = process.env.CONTENT_PLATFORM_YANDEX_APP_FOLDER_ONLY === "true";
     this.bindings = parseBindings();
     if (this.baseUrl) {
       let url: URL;
@@ -298,6 +301,7 @@ export class ContentPlatformService {
     const binding = this.binding(workspaceId, botSlug);
     if (!this.yandexToken || !binding.yandexRoot) throw new DomainError(503, "Yandex Disk browser is not configured for this bot", "yandex_disk_browser_not_configured");
     const root = normalizeDiskPath(binding.yandexRoot);
+    await this.requireApplicationFolder(root);
     const path = normalizeDiskPath(requestedPath || root);
     if (root !== "/" && path !== root && !path.startsWith(`${root}/`)) throw new DomainError(403, "This Yandex Disk folder is outside the bot library", "yandex_disk_path_forbidden");
 
@@ -344,6 +348,7 @@ export class ContentPlatformService {
     const binding = this.binding(workspaceId, botSlug);
     if (!this.yandexToken || !binding.yandexRoot) throw new DomainError(503, "Yandex Disk browser is not configured for this bot", "yandex_disk_browser_not_configured");
     const root = normalizeDiskPath(binding.yandexRoot);
+    await this.requireApplicationFolder(root);
     const path = normalizeDiskPath(requestedPath);
     if (root !== "/" && path !== root && !path.startsWith(`${root}/`)) throw new DomainError(403, "This Yandex Disk file is outside the bot library", "yandex_disk_path_forbidden");
     const query = new URLSearchParams({ path, preview_size: "M", preview_crop: "true", fields: "type,preview" });
@@ -398,12 +403,43 @@ export class ContentPlatformService {
     return bot;
   }
 
+  private async applicationFolderRoot() {
+    this.yandexAppRoot ??= (async () => {
+      let response: Response;
+      try {
+        response = await fetch("https://cloud-api.yandex.net/v1/disk/resources?path=app%3A%2F&fields=path,type", {
+          headers: { accept: "application/json", authorization: `OAuth ${this.yandexToken}` },
+          signal: AbortSignal.timeout(8_000),
+        });
+      } catch {
+        throw new DomainError(502, "Yandex Disk is temporarily unavailable", "yandex_disk_unavailable");
+      }
+      if (!response.ok) throw new DomainError(502, "Yandex Disk application folder is unavailable", "yandex_disk_app_folder_unavailable");
+      const metadata = await response.json() as { path?: string; type?: string };
+      if (metadata.type !== "dir" || !metadata.path?.startsWith("disk:/")) throw new DomainError(502, "Yandex Disk returned an invalid application folder", "yandex_disk_invalid_app_folder");
+      const root = normalizeDiskPath(metadata.path);
+      if (root === "/") throw new DomainError(502, "Yandex Disk returned an invalid application folder", "yandex_disk_invalid_app_folder");
+      return root;
+    })().catch((error) => { this.yandexAppRoot = undefined; throw error; });
+    return this.yandexAppRoot;
+  }
+
+  private async requireApplicationFolder(path: string) {
+    if (!this.yandexAppFolderOnly) return undefined;
+    const root = await this.applicationFolderRoot();
+    if (path !== root && !path.startsWith(`${root}/`)) throw new DomainError(403, "The bot library must be inside the Yandex Disk application folder", "yandex_disk_app_folder_required");
+    return root;
+  }
+
   private async ensureYandexFolder(binding: ContentPlatformBinding) {
     if (!this.yandexToken || !binding.yandexRoot) return;
     const root = normalizeDiskPath(binding.yandexRoot);
     if (this.ensuredYandexFolders.has(root)) return;
-    const segments = root.split("/").filter(Boolean);
-    let current = "";
+    const appRoot = await this.requireApplicationFolder(root);
+    // An app-folder token cannot inspect / or /Приложения. Resolve its own
+    // folder through app:/ and create only descendants of that boundary.
+    const segments = (appRoot ? root.slice(appRoot.length) : root).split("/").filter(Boolean);
+    let current = appRoot ?? "";
     for (const segment of segments) {
       current += `/${segment}`;
       const query = new URLSearchParams({ path: current });
