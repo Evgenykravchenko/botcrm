@@ -6,13 +6,19 @@ import { config as loadEnv } from "dotenv";
 import { resolve } from "node:path";
 import { Queue, Worker, type ConnectionOptions } from "bullmq";
 import { Pool } from "pg";
-import { messageProcessor, type MessageJob } from "./message-processor.js";
+import { messageProcessor, type MessageJob, vkNativeAttachmentParam } from "./message-processor.js";
 
 loadEnv({ path: resolve(process.cwd(), ".env"), quiet: true });
 if (!process.env.DATABASE_URL) loadEnv({ path: resolve(process.cwd(), "../../.env"), quiet: true });
 const workspaceId = "00000000-0000-4000-8000-000000000001";
 function redisConnection(redisUrl: string): ConnectionOptions { const url = new URL(redisUrl); return { host: url.hostname, port: Number(url.port || 6379), db: url.pathname.length > 1 ? Number(url.pathname.slice(1)) : 0 }; }
 async function waitFor<T>(read: () => Promise<T | undefined>, timeoutMs = 8_000): Promise<T> { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { const result = await read(); if (result !== undefined) return result; await new Promise((resolveWait) => setTimeout(resolveWait, 40)); } throw new Error("Timed out waiting for outbound delivery"); }
+
+test("VK native attachment references are validated and serialized", () => {
+  assert.equal(vkNativeAttachmentParam(["photo-1_2_key", "video-1_3"]), "photo-1_2_key,video-1_3");
+  assert.throws(() => vkNativeAttachmentParam(["https://example.com/file"]), /reference is invalid/);
+  assert.throws(() => vkNativeAttachmentParam(Array.from({ length: 11 }, (_, index) => `photo-1_${index + 1}`)), /reference is invalid/);
+});
 
 test("message worker delivers a signed generic outbound message exactly once", async (context) => {
   if (!process.env.DATABASE_URL || !process.env.REDIS_URL) return context.skip("DATABASE_URL and REDIS_URL are required");

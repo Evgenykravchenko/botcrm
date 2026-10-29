@@ -68,6 +68,15 @@ export interface AttachmentRecord {
   mimeType: string;
   byteSize: number;
   createdAt: string;
+  previewUrl?: string;
+}
+
+export interface DeliveryButton {
+  id?: string;
+  text: string;
+  type: "callback" | "url";
+  value: string;
+  row: number;
 }
 
 export interface DealRecord {
@@ -221,7 +230,7 @@ export class BotCrmCore {
     return updated;
   }
 
-  sendMessage(input: { conversationId: string; actor: "bot" | "operator"; text: string; idempotencyKey: string; attachmentIds?: string[]; buttons?: Array<{ id?: string; text: string; type: "callback" | "url"; value: string; row: number }> }, workspaceId?: string) {
+  sendMessage(input: { conversationId: string; actor: "bot" | "operator"; text: string; idempotencyKey: string; attachmentIds?: string[]; nativeAttachmentRefs?: string[]; buttons?: DeliveryButton[] }, workspaceId?: string) {
     if (!input.idempotencyKey) throw new DomainError(400, "Idempotency-Key is required", "idempotency_required");
     const conversation = this.conversations.get(input.conversationId); if (!conversation || (workspaceId && conversation.workspaceId !== workspaceId)) throw new DomainError(404, "Conversation not found", "conversation_not_found");
     const duplicate = (this.messages.get(input.conversationId) ?? []).find((message) => message.eventId === input.idempotencyKey); if (duplicate) return { duplicate: true, message: duplicate };
