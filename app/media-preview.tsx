@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- Authenticated Blob thumbnails need native dimensions for the video aspect ratio. */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, LoaderCircle, Play, X } from "lucide-react";
 import { botcrmApi } from "./api-client";
 
@@ -42,5 +42,16 @@ export function DiskVideoPlayer({ botSlug, path, name, poster, fallbackUrl }: { 
 }
 
 export function VideoPreviewDialog({ botSlug, path, name, poster, close }: { botSlug: string; path: string; name: string; poster?: string; close: () => void }) {
-  return <div className="modal-backdrop video-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}><section className="modal video-preview-dialog" role="dialog" aria-modal="true" aria-label={name}><header><h2>{name}</h2><button className="icon-button" type="button" aria-label="Закрыть видео" onClick={close}><X size={19}/></button></header><DiskVideoPlayer botSlug={botSlug} path={path} name={name} poster={poster}/></section></div>;
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    closeButton.current?.focus();
+    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
+  }, []);
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); close(); } };
+    document.addEventListener("keydown", keydown);
+    return () => document.removeEventListener("keydown", keydown);
+  }, [close]);
+  return <div className="modal-backdrop video-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}><section className="modal video-preview-dialog" role="dialog" aria-modal="true" aria-label={name}><header><h2>{name}</h2><button ref={closeButton} className="icon-button" type="button" aria-label="Закрыть видео" onClick={close}><X size={19}/></button></header><DiskVideoPlayer botSlug={botSlug} path={path} name={name} poster={poster}/></section></div>;
 }

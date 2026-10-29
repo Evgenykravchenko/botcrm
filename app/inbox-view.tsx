@@ -170,7 +170,7 @@ function MessageAttachment({ attachment, botSlug }: { attachment: ApiAttachment 
   const [url, setUrl] = useState(attachment.previewUrl || "");
   const [failed, setFailed] = useState(false);
   const [nativeRatio, setNativeRatio] = useState(16 / 9);
-  const nativePreview = useDiskPreview(botSlug, attachment.yandexPath || "", attachment.source === "vk_native" && !attachment.previewUrl);
+  const nativePreview = useDiskPreview(botSlug, attachment.yandexPath || "", attachment.source === "vk_native" && !attachment.previewUrl && (attachment.mediaKind === "photo" || attachment.mediaKind === "video"));
   useEffect(() => {
     setUrl(attachment.previewUrl || "");
     setFailed(false);

@@ -412,7 +412,7 @@ function PreviewMediaGallery({ items, botSlug }: { items: PreviewGalleryItem[]; 
     const ratio = ratios[item.key] || 1;
     const orientation = ratio < .82 ? "portrait" : ratio > 1.35 ? "wide" : "square";
     const style = { ...(item.previewUrl ? { backgroundImage: `url(${JSON.stringify(item.previewUrl).slice(1, -1)})` } : {}), ...(visibleItems.length === 1 ? { aspectRatio: String(ratio) } : {}) };
-    return <span className={`preview-gallery-item ${item.kind} ${orientation}`} key={item.key} style={style} role={item.previewUrl ? "img" : undefined} aria-label={item.name}>{!item.previewUrl && mediaGlyph(item.kind, 25)}{item.kind === "video" && <button type="button" className="preview-play" aria-label={`Посмотреть ${item.name}`} onClick={() => setViewing(item)}><Play size={18}/></button>}{index === 9 && items.length > 10 && <b className="preview-gallery-overflow">+{items.length - 10}</b>}</span>;
+    return <span className={`preview-gallery-item ${item.kind} ${orientation}`} key={item.key} style={style} role={item.previewUrl && item.kind !== "video" ? "img" : undefined} aria-label={item.name}>{!item.previewUrl && mediaGlyph(item.kind, 25)}{item.kind === "video" && <button type="button" className="preview-play" aria-label={`Посмотреть ${item.name}`} onClick={() => setViewing(item)}><Play size={18}/></button>}{index === 9 && items.length > 10 && <b className="preview-gallery-overflow">+{items.length - 10}</b>}</span>;
   })}</div>{viewing?.yandexPath && <VideoPreviewDialog botSlug={botSlug} path={viewing.yandexPath} name={viewing.name} poster={viewing.previewUrl} close={() => setViewing(null)}/>}</>;
 }
 
