@@ -98,7 +98,7 @@ export class PostgresStore {
   }
   private async ensureBot(client: PoolClient, workspaceId: string, slug: string) {
     const normalized = slug.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_") || "custom_bot";
-    const result = await client.query<{ id: string }>(`insert into bots(workspace_id,slug,name,integration_mode) values($1,$2,$3,'MIRROR') on conflict(workspace_id,slug) do update set name=excluded.name returning id`, [workspaceId, normalized, slug]);
+    const result = await client.query<{ id: string }>(`insert into bots(workspace_id,slug,name,integration_mode) values($1,$2,$3,'MIRROR') on conflict(workspace_id,slug) do update set name=bots.name returning id`, [workspaceId, normalized, slug]);
     return result.rows[0].id;
   }
 
