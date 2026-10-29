@@ -20,6 +20,9 @@ test("staging a Funnel transport preserves live port and storage exactly", () =>
 test("committed Funnel config is the exact persistent live config", async () => {
   const source = await readFile(new URL("../infra/tailscale-serve/serve.json", import.meta.url), "utf8");
   assert.equal(JSON.stringify(funnelConfig(JSON.parse(source), "crm.example.ts.net", 443), null, 2) + "\n", source);
+  const legacy = JSON.parse(source);
+  legacy.Web = { "${TS_CERT_DOMAIN}:443": { Handlers: { "/": { Proxy: "http://caddy:8080" } } }, "${TS_CERT_DOMAIN}:8443": legacy.Web["${TS_CERT_DOMAIN}:8443"] };
+  assert.equal(JSON.stringify(funnelConfig(legacy, "crm.example.ts.net", 443), null, 2) + "\n", source);
 });
 
 test("release upstreams replace forwarded addresses and reject config injection", () => {

@@ -55,6 +55,7 @@ export function funnelConfig(original, domain, port) {
   const configDomain = Object.keys(config.AllowFunnel ?? {}).some((key) => key.includes("${TS_CERT_DOMAIN}")) ? "${TS_CERT_DOMAIN}" : domain;
   config.TCP[String(port)] = { HTTPS: true };
   config.Web ??= {};
+  delete config.Web[`${configDomain}:${port}`];
   config.Web[`${configDomain}:${port}`] = { Handlers: { "/": { Proxy: "http://botcrm-edge-1:8080" } } };
   config.AllowFunnel ??= {};
   config.AllowFunnel[`${configDomain}:${port}`] = true;
