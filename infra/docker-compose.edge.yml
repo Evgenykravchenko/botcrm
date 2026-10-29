@@ -1,0 +1,23 @@
+name: botcrm
+services:
+  edge:
+    image: caddy:2.10.2-alpine
+    volumes:
+      - ../.runtime/edge:/etc/caddy:ro
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      backend: {}
+      content_platform:
+        # Existing content bots keep their internal http://api:4100 address.
+        aliases: [api]
+    logging:
+      driver: json-file
+      options: { max-size: 20m, max-file: "5" }
+networks:
+  backend:
+    external: true
+    name: botcrm_backend
+  content_platform:
+    external: true
+    name: ${CONTENT_PLATFORM_NETWORK:-bot_platform_backend}

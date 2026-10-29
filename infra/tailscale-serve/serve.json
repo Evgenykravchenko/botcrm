@@ -1,17 +1,20 @@
 {
   "TCP": {
-    "443": { "HTTPS": true },
-    "8443": { "HTTPS": true }
+    "443": {
+      "TCPForward": "botcrm-edge-1:8081",
+      "TerminateTLS": "${TS_CERT_DOMAIN}",
+      "ProxyProtocol": 2
+    },
+    "8443": {
+      "HTTPS": true
+    }
   },
   "Web": {
-    "${TS_CERT_DOMAIN}:443": {
-      "Handlers": {
-        "/": { "Proxy": "http://caddy:8080" }
-      }
-    },
     "${TS_CERT_DOMAIN}:8443": {
       "Handlers": {
-        "/": { "Proxy": "http://minio:9000" }
+        "/": {
+          "Proxy": "http://minio:9000"
+        }
       }
     }
   },

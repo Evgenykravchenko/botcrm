@@ -1,0 +1,31 @@
+# Application slots share the existing stateful infrastructure. Never run down -v.
+services:
+  api-release:
+    extends: { file: docker-compose.prod.yml, service: api }
+    image: botcrm-api:${BOTCRM_RELEASE:?BOTCRM_RELEASE is required}
+    build: !reset null
+    depends_on: !reset {}
+  web-release:
+    extends: { file: docker-compose.prod.yml, service: web }
+    image: botcrm-web:${BOTCRM_RELEASE:?BOTCRM_RELEASE is required}
+    build: !reset null
+    depends_on: !reset {}
+  worker-release:
+    extends: { file: docker-compose.prod.yml, service: worker }
+    image: botcrm-worker:${BOTCRM_RELEASE:?BOTCRM_RELEASE is required}
+    build: !reset null
+    depends_on: !reset {}
+    environment:
+      BOTCRM_API_URL: http://${BOTCRM_RELEASE_API:?BOTCRM_RELEASE_API is required}:4100/api/v1
+  migrate-release:
+    extends: { file: docker-compose.prod.yml, service: migrate }
+    image: botcrm-migrate:${BOTCRM_RELEASE:?BOTCRM_RELEASE is required}
+    build: !reset null
+    depends_on: !reset {}
+networks:
+  backend:
+    external: true
+    name: botcrm_backend
+  content_platform:
+    external: true
+    name: ${CONTENT_PLATFORM_NETWORK:-bot_platform_backend}

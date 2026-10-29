@@ -136,6 +136,8 @@ npm run prod:check:live
 
 Полная инструкция с firewall, обновлениями, backup, восстановлением и диагностикой: **[Production deployment](docs/PRODUCTION.md)**.
 
+Для обновления уже работающей установки через Funnel: **[проверка новой версии и переключение без остановки API](docs/SAFE_DEPLOY.md)**.
+
 ### Вариант без публичного IP: Tailscale Funnel
 
 В репозитории есть отдельный Compose-профиль, который создаёт для BotCRM собственный Tailscale-узел. Панель/API публикуются на `443`, медиа — на `8443`; внутренние PostgreSQL, Redis и MinIO остаются только в сети `botcrm_backend`.
