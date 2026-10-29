@@ -98,17 +98,15 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     const email = input.email.trim().toLowerCase();
     const windowMinutes = Math.max(1, Number(process.env.LOGIN_RATE_LIMIT_WINDOW_MINUTES ?? 15));
     const pairMax = Math.max(1, Number(process.env.LOGIN_RATE_LIMIT_PAIR_MAX ?? 5));
-    const emailMax = Math.max(pairMax, Number(process.env.LOGIN_RATE_LIMIT_EMAIL_MAX ?? 10));
     const ipMax = Math.max(pairMax, Number(process.env.LOGIN_RATE_LIMIT_IP_MAX ?? 30));
     const attempts = await pool.query(`select
       count(*) filter(where lower(email)=$1 and ip_address is not distinct from $2::inet)::int pair_count,
-      count(*) filter(where lower(email)=$1)::int email_count,
       count(*) filter(where ip_address is not distinct from $2::inet)::int ip_count
       from auth_login_attempts
       where workspace_id=$4 and succeeded=false and attempted_at>now()-($3::int*interval '1 minute')
         and (lower(email)=$1 or ip_address is not distinct from $2::inet)`, [email, meta.ip ?? null, windowMinutes, workspaceId]);
     const counters = attempts.rows[0] ?? {};
-    if (Number(counters.pair_count ?? 0) >= pairMax || Number(counters.email_count ?? 0) >= emailMax || Number(counters.ip_count ?? 0) >= ipMax) {
+    if (Number(counters.pair_count ?? 0) >= pairMax || Number(counters.ip_count ?? 0) >= ipMax) {
       throw new DomainError(429, `Too many login attempts. Try again in ${windowMinutes} minutes`, "login_rate_limited");
     }
     const result = await pool.query("select id,workspace_id,email,display_name,password_hash,role,totp_secret_encrypted,disabled_at from users where workspace_id=$1 and lower(email)=$2 limit 1", [workspaceId, email]);

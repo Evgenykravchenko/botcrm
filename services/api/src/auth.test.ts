@@ -150,11 +150,14 @@ test("RBAC protects owners and preserves an active workspace owner", async () =>
     await pool.end();
   }
 });
-test("database login limiter blocks account rotation and IP rotation", async () => {
+test("database login limiter isolates clients and still blocks pair and source abuse", async () => {
   const pool = new Pool({ connectionString: databaseUrl });
   const auth = new AuthService();
   const suffix = randomUUID();
   const accountEmail = `brute-${suffix}-account@botcrm.test`;
+  const victimId = randomUUID();
+  const password = `Valid-${randomUUID()}`;
+  await pool.query("insert into users(id,workspace_id,email,display_name,password_hash,role) values($1,$2,$3,'Login Isolation',$4,'OPERATOR')", [victimId, workspaceId, accountEmail, await hash(password, { algorithm: Algorithm.Argon2id, memoryCost: 19_456, timeCost: 2, parallelism: 1 })]);
   const sharedIp = "127.0.20.50";
   const previous = {
     authRequired: process.env.AUTH_REQUIRED,
@@ -173,7 +176,13 @@ test("database login limiter blocks account rotation and IP rotation", async () 
     for (const ip of ["127.0.20.1", "127.0.20.2"]) {
       await assert.rejects(() => auth.login({ workspace: "ws_demo", email: accountEmail, password: "wrong-password" }, { ip }), (error: unknown) => error instanceof DomainError && error.code === "invalid_credentials");
     }
-    await assert.rejects(() => auth.login({ workspace: "ws_demo", email: accountEmail, password: "wrong-password" }, { ip: "127.0.20.3" }), (error: unknown) => error instanceof DomainError && error.status === 429 && error.code === "login_rate_limited");
+    // A populated legacy account-wide failure counter cannot block a correct password elsewhere.
+    const login = await auth.login({ workspace: "ws_demo", email: accountEmail, password }, { ip: "127.0.20.3" });
+    assert.equal(login.user.userId, victimId);
+    await auth.logout(login.user);
+    await assert.rejects(() => auth.login({ workspace: "ws_demo", email: accountEmail, password: "wrong-password" }, { ip: "127.0.20.1" }), (error: unknown) => error instanceof DomainError && error.code === "invalid_credentials");
+    // The UUID alias and email case must not evade the canonical DB pair limit.
+    await assert.rejects(() => auth.login({ workspace: workspaceId, email: accountEmail.toUpperCase(), password }, { ip: "127.0.20.1" }), (error: unknown) => error instanceof DomainError && error.status === 429 && error.code === "login_rate_limited");
 
     await pool.query("delete from auth_login_attempts where email like $1", [`brute-${suffix}-%`]);
     process.env.LOGIN_RATE_LIMIT_EMAIL_MAX = "100";
@@ -190,6 +199,7 @@ test("database login limiter blocks account rotation and IP rotation", async () 
     if (previous.window === undefined) delete process.env.LOGIN_RATE_LIMIT_WINDOW_MINUTES; else process.env.LOGIN_RATE_LIMIT_WINDOW_MINUTES = previous.window;
     await auth.onModuleDestroy();
     await pool.query("delete from auth_login_attempts where email like $1 or ip_address=$2::inet", [`brute-${suffix}-%`, sharedIp]);
+    await pool.query("delete from users where id=$1", [victimId]);
     await pool.end();
   }
 });
