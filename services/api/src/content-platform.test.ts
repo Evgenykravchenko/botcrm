@@ -2,7 +2,76 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ContentPlatformService, validateContentMediaInput, validateKeywordReplyInput } from "./content-platform.js";
 import { RealtimeService } from "./realtime.js";
+import { ContentMediaProgressService, validateMediaProgress } from "./content-media-progress.js";
+import { randomUUID } from "node:crypto";
+import { Pool } from "pg";
 import { filter, firstValueFrom, timeout } from "rxjs";
+
+test("media progress validates estimates and ignores unknown properties", () => {
+  const value = { attemptId: randomUUID(), stage: "transferring", transferredBytes: 40, totalBytes: 100, bytesPerSecond: 10, etaSeconds: 6 };
+  assert.deepEqual(validateMediaProgress({ ...value, signedUrl: "not-persisted" }), value);
+  for (const patch of [{ transferredBytes: 101 }, { bytesPerSecond: Infinity }, { etaSeconds: -1 }, { stage: "finalizing" }, { attemptId: "not-an-attempt" }, { totalBytes: 0 }, { bytesPerSecond: null }]) assert.throws(() => validateMediaProgress({ ...value, ...patch }));
+});
+
+test("progress survives API instances but not another workspace, attempt, source or completed job", { skip: !process.env.DATABASE_URL }, async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const workspaces = [randomUUID(), randomUUID()];
+  const first = new ContentMediaProgressService();
+  const second = new ContentMediaProgressService();
+  try {
+    for (const workspace of workspaces) {
+      await pool.query("insert into workspaces(id,name) values($1,'Progress test')", [workspace]);
+      await pool.query("insert into bots(workspace_id,slug,name,integration_mode) values($1,'progress_bot','Progress test','MIRROR')", [workspace]);
+    }
+    await first.onModuleInit(); await second.onModuleInit();
+    const progress = validateMediaProgress({ attemptId: randomUUID(), stage: "connecting", transferredBytes: 0, totalBytes: 1000, bytesPerSecond: null, etaSeconds: null });
+    await first.begin(workspaces[0], "progress_bot", 7, "/library/video.mov", progress);
+    assert.equal((await second.list(workspaces[0], "progress_bot")).get(7)?.attemptId, progress.attemptId);
+    assert.equal((await second.list(workspaces[1], "progress_bot")).size, 0);
+    const update = { ...progress, stage: "transferring" as const, transferredBytes: 600, bytesPerSecond: 100, etaSeconds: 4 };
+    assert.equal(await second.update(workspaces[1], "progress_bot", 7, "/library/video.mov", update), false);
+    assert.equal(await second.update(workspaces[0], "progress_bot", 7, "/wrong.mov", update), false);
+    assert.equal(await second.update(workspaces[0], "progress_bot", 7, "/library/video.mov", { ...update, attemptId: randomUUID() }), false);
+    assert.equal(await second.update(workspaces[0], "progress_bot", 7, "/library/video.mov", update), true);
+    assert.equal(await second.update(workspaces[0], "progress_bot", 7, "/library/video.mov", { ...update, transferredBytes: 300 }), false);
+    await first.clear(workspaces[0], "progress_bot", 7);
+    assert.equal(await second.update(workspaces[0], "progress_bot", 7, "/library/video.mov", update), false, "late telemetry cannot recreate a completed job");
+    assert.equal((await second.list(workspaces[0], "progress_bot")).size, 0);
+  } finally {
+    await Promise.all([first.onModuleDestroy(), second.onModuleDestroy()]);
+    await pool.query("delete from workspaces where id=any($1::uuid[])", [workspaces]);
+    await pool.end();
+  }
+});
+
+test("playback URLs are restricted to the authenticated bot folder and video sources", async () => {
+  const keys = ["CONTENT_PLATFORM_URL", "CONTENT_PLATFORM_TOKEN", "CONTENT_PLATFORM_YANDEX_TOKEN", "CONTENT_PLATFORM_BINDINGS"] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const originalFetch = globalThis.fetch;
+  process.env.CONTENT_PLATFORM_URL = "https://content.internal";
+  process.env.CONTENT_PLATFORM_TOKEN = "test-content-token";
+  process.env.CONTENT_PLATFORM_YANDEX_TOKEN = "test-disk-token";
+  process.env.CONTENT_PLATFORM_BINDINGS = JSON.stringify([{ workspaceId: "ws_test", botSlug: "video_bot", contentBotKey: "video-bot", yandexRoot: "/library" }]);
+  let mime = "video/quicktime";
+  let host = "https://downloader.disk.yandex.ru/video?signature=test-only";
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(new Headers(init?.headers).get("authorization"), "OAuth test-disk-token");
+    return Response.json(String(input).includes("resources/download?") ? { href: host } : { type: "file", mime_type: mime });
+  }) as typeof fetch;
+  try {
+    const service = new ContentPlatformService();
+    assert.deepEqual(await service.yandexVideoPlayback("ws_test", "video_bot", "/library/video.mov"), { url: host });
+    await assert.rejects(() => service.yandexVideoPlayback("ws_other", "video_bot", "/library/video.mov"));
+    await assert.rejects(() => service.yandexVideoPlayback("ws_test", "video_bot", "/private/video.mov"), /outside/);
+    mime = "text/html";
+    await assert.rejects(() => service.yandexVideoPlayback("ws_test", "video_bot", "/library/video.mov"), /not a video/);
+    mime = "video/mp4"; host = "http://127.0.0.1/private";
+    await assert.rejects(() => service.yandexVideoPlayback("ws_test", "video_bot", "/library/video.mov"), /host/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of keys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
+  }
+});
 
 test("media readiness respects Telegram file IDs and Instagram delivery expiry", async () => {
   const keys = ["CONTENT_PLATFORM_URL", "CONTENT_PLATFORM_TOKEN", "CONTENT_PLATFORM_BINDINGS"] as const;
