@@ -147,6 +147,79 @@ test("content bot provisioning creates its Yandex Disk folder once", async () =>
   }
 });
 
+test("app-folder tokens provision descendants without reading protected parent folders", async () => {
+  const env = { ...process.env };
+  const originalFetch = globalThis.fetch;
+  process.env.CONTENT_PLATFORM_URL = "https://content.internal";
+  process.env.CONTENT_PLATFORM_TOKEN = "server-secret";
+  process.env.CONTENT_PLATFORM_YANDEX_TOKEN = "app-folder-token";
+  process.env.CONTENT_PLATFORM_YANDEX_APP_FOLDER_ONLY = "true";
+  delete process.env.CONTENT_PLATFORM_BINDINGS;
+  const appRoot = "/Apps/My CRM";
+  const paths: string[] = [];
+  let rootLookups = 0;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.hostname === "content.internal") return Response.json({ data: [{ id: 1, key: "new-content" }] });
+    const path = url.searchParams.get("path")!;
+    if (path === "app:/") { rootLookups++; return Response.json({ path: `disk:${appRoot}`, type: "dir" }); }
+    assert.ok(path.startsWith(`${appRoot}/`), `unexpected access outside app folder: ${path}`);
+    if (init?.method === "PUT") { paths.push(path); return new Response(null, { status: 201 }); }
+    if (url.searchParams.has("preview_size")) return Response.json({ _embedded: { items: [{ path: `disk:${appRoot}/new_bot/picture.jpg`, name: "picture.jpg", type: "file", mime_type: "image/jpeg" }] } });
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+  try {
+    const service = new ContentPlatformService();
+    const binding = { workspaceId: "ws_demo", botSlug: "new_bot", contentBotKey: "new-content", yandexRoot: `${appRoot}/new_bot/photos` };
+    await service.ensureContentBot(binding);
+    await service.ensureContentBot(binding);
+    assert.deepEqual(paths, [`${appRoot}/new_bot`, `${appRoot}/new_bot/photos`]);
+    service.registerBinding({ ...binding, yandexRoot: `${appRoot}/new_bot` });
+    const listing = await service.listYandexFiles("ws_demo", "new_bot");
+    assert.equal(listing.items[0].path, `${appRoot}/new_bot/picture.jpg`);
+    assert.equal(rootLookups, 1);
+    service.registerBinding({ ...binding, yandexRoot: `${appRoot}-other/new_bot` });
+    await assert.rejects(service.listYandexFiles("ws_demo", "new_bot"), { code: "yandex_disk_app_folder_required" });
+    await assert.rejects(service.yandexFilePreview("ws_demo", "new_bot", `${appRoot}-other/new_bot/a.jpg`), { code: "yandex_disk_app_folder_required" });
+    await assert.rejects(service.ensureContentBot({ ...binding, yandexRoot: "/Personal" }), { code: "yandex_disk_app_folder_required" });
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of ["CONTENT_PLATFORM_URL", "CONTENT_PLATFORM_TOKEN", "CONTENT_PLATFORM_YANDEX_TOKEN", "CONTENT_PLATFORM_YANDEX_APP_FOLDER_ONLY", "CONTENT_PLATFORM_BINDINGS"]) {
+      if (env[key] === undefined) delete process.env[key]; else process.env[key] = env[key];
+    }
+  }
+});
+
+test("application-folder lookup recovers after an upstream error", async () => {
+  const env = { ...process.env };
+  const originalFetch = globalThis.fetch;
+  process.env.CONTENT_PLATFORM_URL = "https://content.internal";
+  process.env.CONTENT_PLATFORM_TOKEN = "server-secret";
+  process.env.CONTENT_PLATFORM_YANDEX_TOKEN = "app-folder-token";
+  process.env.CONTENT_PLATFORM_YANDEX_APP_FOLDER_ONLY = "true";
+  delete process.env.CONTENT_PLATFORM_BINDINGS;
+  let attempts = 0;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.hostname === "content.internal") return Response.json({ data: [{ id: 1 }] });
+    assert.equal(url.searchParams.get("path"), "app:/");
+    if (++attempts === 1) return new Response(null, { status: 503 });
+    return Response.json({ path: "disk:/Приложения/bot_crm", type: "dir" });
+  }) as typeof fetch;
+  try {
+    const service = new ContentPlatformService();
+    const binding = { workspaceId: "ws_demo", botSlug: "new_bot", contentBotKey: "new-content", yandexRoot: "/Приложения/bot_crm" };
+    await assert.rejects(service.ensureContentBot(binding), { code: "yandex_disk_app_folder_unavailable" });
+    await service.ensureContentBot(binding);
+    assert.equal(attempts, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of ["CONTENT_PLATFORM_URL", "CONTENT_PLATFORM_TOKEN", "CONTENT_PLATFORM_YANDEX_TOKEN", "CONTENT_PLATFORM_YANDEX_APP_FOLDER_ONLY", "CONTENT_PLATFORM_BINDINGS"]) {
+      if (env[key] === undefined) delete process.env[key]; else process.env[key] = env[key];
+    }
+  }
+});
+
 test("content bot provisioning accepts an existing folder without write access", async () => {
   const previous = { url: process.env.CONTENT_PLATFORM_URL, token: process.env.CONTENT_PLATFORM_TOKEN, yandex: process.env.CONTENT_PLATFORM_YANDEX_TOKEN, bindings: process.env.CONTENT_PLATFORM_BINDINGS, fetch: globalThis.fetch };
   process.env.CONTENT_PLATFORM_URL = "https://content.internal";
