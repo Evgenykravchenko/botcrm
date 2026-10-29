@@ -95,6 +95,9 @@ test("VK mirror connector requires only the community access token", async () =>
   const slug = `vk_mirror_${suffix}`;
   let connectorId: string | undefined;
   let botId: string | undefined;
+  let conversationId: string | undefined;
+  let contactId: string | undefined;
+  const eventId = `vk-mirror-name-${suffix}`;
   try {
     const connector = await store.createConnector("ws_demo", {
       botName: "VK Mirror Test",
@@ -109,6 +112,12 @@ test("VK mirror connector requires only the community access token", async () =>
     assert.equal(connector.integrationMode, "MIRROR");
     assert.deepEqual(connector.configuredFields.sort(), ["accessToken", "apiVersion"].sort());
 
+    const accepted = await store.ingest({ event_id: eventId, schema_version: "1.0", occurred_at: new Date().toISOString(), workspace_id: "ws_demo", bot_id: slug, channel: "vk", external_chat_id: `chat-${suffix}`, external_user_id: `user-${suffix}`, type: "message.received", message: { text: "Name must stay readable" } });
+    conversationId = accepted.conversationId;
+    contactId = accepted.contactId;
+    const named = await store.pool.query("select name from bots where id=$1", [botId]);
+    assert.equal(named.rows[0].name, "VK Mirror Test");
+
     await assert.rejects(
       () => store.createConnector("ws_demo", {
         botName: "VK Gateway Invalid",
@@ -120,6 +129,16 @@ test("VK mirror connector requires only the community access token", async () =>
       (error: unknown) => error instanceof DomainError && error.code === "connector_secrets_required",
     );
   } finally {
+    if (conversationId) {
+      await store.pool.query("delete from audit_events where workspace_id=$1 and entity_id=$2", [workspaceUuid, conversationId]);
+      await store.pool.query("delete from messages where conversation_id=$1", [conversationId]);
+      await store.pool.query("delete from conversations where id=$1", [conversationId]);
+    }
+    if (contactId) {
+      await store.pool.query("delete from channel_identities where contact_id=$1", [contactId]);
+      await store.pool.query("delete from contacts where id=$1", [contactId]);
+    }
+    await store.pool.query("delete from ingested_events where workspace_id=$1 and event_id=$2", [workspaceUuid, eventId]);
     if (connectorId) {
       await store.pool.query("delete from audit_events where workspace_id=$1 and entity_id=$2", [workspaceUuid, connectorId]);
       await store.pool.query("delete from connectors where id=$1", [connectorId]);
