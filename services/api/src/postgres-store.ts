@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Pool, PoolClient } from "pg";
-import { AttachmentRecord, CampaignRecord, Channel, ControlMode, DealRecord, DeliveryButton, DomainError, MessageRecord, NormalizedEvent } from "./core.js";
+import { AttachmentRecord, CampaignRecord, Channel, ControlMode, DealRecord, DeliveryButton, DomainError, MessageRecord, NativeAttachmentInput, NormalizedEvent } from "./core.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE, MediaObjectHead, MediaUploadInput } from "./media.js";
 import { AutomationAction, AutomationRuleInput, automationMatches, isUuid, validateAutomationRule } from "./automation.js";
 import { decryptSecret, encryptSecret } from "./secrets.js";
@@ -14,6 +14,35 @@ const DEMO_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001";
 const DEMO_USER_ID = "00000000-0000-4000-8000-000000000002";
 const MAX_NATIVE_ATTACHMENTS_PER_MESSAGE = 10;
 const VK_NATIVE_ATTACHMENT_RE = /^(?:photo|video|audio|doc|wall|market|poll)-?\d+_\d+(?:_[A-Za-z0-9_-]+)?$/;
+
+function vkNativeKind(ref: string): NativeAttachmentInput["kind"] {
+  if (ref.startsWith("photo")) return "photo";
+  if (ref.startsWith("video")) return "video";
+  if (ref.startsWith("audio")) return "audio";
+  return "document";
+}
+
+function vkNativeUrl(ref: string) {
+  const match = /^(photo|video|audio|doc)(-?\d+_\d+)/.exec(ref);
+  return match ? `https://vk.com/${match[1]}${match[2]}` : undefined;
+}
+
+function nativeAttachmentName(kind: NativeAttachmentInput["kind"]) {
+  return kind === "photo" ? "Фотография VK" : kind === "video" ? "Видео VK" : kind === "audio" ? "Аудио VK" : "Документ VK";
+}
+
+function normalizeNativeAttachment(input: NativeAttachmentInput) {
+  const ref = String(input?.ref ?? "").trim();
+  if (!VK_NATIVE_ATTACHMENT_RE.test(ref)) throw new DomainError(400, "A native attachment reference is invalid", "invalid_native_attachment");
+  const inferredKind = vkNativeKind(ref);
+  if (!["photo", "video", "audio", "document"].includes(String(input?.kind))) throw new DomainError(400, "Native attachment kind is invalid", "invalid_native_attachment");
+  const kind = input.kind;
+  if (kind !== inferredKind && !(kind === "document" && /^(?:doc|wall|market|poll)/.test(ref))) throw new DomainError(400, "Native attachment kind does not match its reference", "invalid_native_attachment");
+  const name = String(input?.name ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 180) || nativeAttachmentName(kind);
+  const yandexPath = String(input?.yandexPath ?? "").trim();
+  if (yandexPath && (!yandexPath.startsWith("/") || yandexPath.length > 2_048 || yandexPath.split("/").includes(".."))) throw new DomainError(400, "Native attachment Yandex Disk path is invalid", "invalid_native_attachment");
+  return { ref, kind, name, ...(yandexPath ? { yandexPath } : {}) };
+}
 
 function defaultContentYandexRoot(botSlug: string) {
   const configuredRoot = String(process.env.CONTENT_PLATFORM_YANDEX_ROOT || "/bot_crm").trim().replace(/\/+$/, "");
@@ -194,7 +223,7 @@ export class PostgresStore {
   }
 
   private mapAttachment(row: Record<string, any>): AttachmentRecord {
-    return { id: row.id, filename: row.filename || "attachment", mimeType: row.mime_type, byteSize: Number(row.byte_size), createdAt: new Date(row.created_at).toISOString() };
+    return { id: row.id, filename: row.filename || "attachment", mimeType: row.mime_type, byteSize: Number(row.byte_size), createdAt: new Date(row.created_at).toISOString(), source: "storage" };
   }
 
   private mapExternalAttachments(row: Record<string, any>): AttachmentRecord[] {
@@ -207,12 +236,26 @@ export class PostgresStore {
       const sourceType = typeof value.type === "string" ? value.type.toLowerCase() : "file";
       const mimeType = sourceType.includes("/") ? sourceType : sourceType === "photo" || sourceType === "image" ? "image/jpeg" : sourceType === "audio" || sourceType === "audio_message" ? "audio/ogg" : sourceType === "video" ? "text/uri-list" : "application/octet-stream";
       const label = sourceType === "photo" || sourceType === "image" ? "Фотография VK" : sourceType === "audio" || sourceType === "audio_message" ? "Голосовое сообщение VK" : sourceType === "video" ? "Видео VK" : "Вложение VK";
-      return [{ id: `external:${row.id}:${index}`, filename: label, mimeType, byteSize: 0, createdAt: new Date(row.occurred_at).toISOString(), previewUrl }];
+      return [{ id: `external:${row.id}:${index}`, filename: label, mimeType, byteSize: 0, createdAt: new Date(row.occurred_at).toISOString(), previewUrl, source: "external" as const }];
+    });
+  }
+
+  private mapNativeAttachments(row: Record<string, any>): AttachmentRecord[] {
+    const metadata = Array.isArray(row.payload?.nativeAttachments) ? row.payload.nativeAttachments : [];
+    const byRef = new Map<string, Record<string, unknown>>();
+    for (const item of metadata) if (item && typeof item === "object" && typeof item.ref === "string") byRef.set(item.ref, item);
+    const refs = Array.isArray(row.payload?.nativeAttachmentRefs) ? row.payload.nativeAttachmentRefs.filter((item: unknown): item is string => typeof item === "string" && VK_NATIVE_ATTACHMENT_RE.test(item)) : [];
+    return refs.map((ref: string, index: number) => {
+      const item = byRef.get(ref);
+      const kind = item && ["photo", "video", "audio", "document"].includes(String(item.kind)) ? String(item.kind) as NativeAttachmentInput["kind"] : vkNativeKind(ref);
+      const filename = typeof item?.name === "string" && item.name.trim() ? item.name.trim() : nativeAttachmentName(kind);
+      const yandexPath = typeof item?.yandexPath === "string" && item.yandexPath.startsWith("/") ? item.yandexPath : undefined;
+      return { id: `native:${row.id}:${index}`, filename, mimeType: kind === "photo" ? "image/jpeg" : `application/vnd.vk.${kind}`, byteSize: 0, createdAt: new Date(row.occurred_at).toISOString(), source: "vk_native", mediaKind: kind, yandexPath, externalUrl: vkNativeUrl(ref) };
     });
   }
 
   private mapMessage(row: Record<string, any>, attachments: AttachmentRecord[] = []): MessageRecord {
-    return { id: row.id, eventId: row.event_id ?? undefined, conversationId: row.conversation_id, direction: row.direction === "INBOUND" ? "inbound" : row.direction === "OUTBOUND" ? "outbound" : "system", actor: row.actor_type, text: row.text_content, status: String(row.status).toLowerCase() as MessageRecord["status"], externalId: row.external_id ?? undefined, attachments: [...attachments, ...this.mapExternalAttachments(row)], createdAt: new Date(row.occurred_at).toISOString() };
+    return { id: row.id, eventId: row.event_id ?? undefined, conversationId: row.conversation_id, direction: row.direction === "INBOUND" ? "inbound" : row.direction === "OUTBOUND" ? "outbound" : "system", actor: row.actor_type, text: row.text_content, status: String(row.status).toLowerCase() as MessageRecord["status"], externalId: row.external_id ?? undefined, attachments: [...attachments, ...this.mapExternalAttachments(row), ...this.mapNativeAttachments(row)], createdAt: new Date(row.occurred_at).toISOString() };
   }
   private mapMediaUpload(row: Record<string, any>) {
     return { id: row.id, filename: row.filename, mimeType: row.mime_type, byteSize: Number(row.byte_size), sha256: row.sha256 ?? undefined, status: String(row.status).toLowerCase(), createdAt: new Date(row.created_at).toISOString(), expiresAt: new Date(row.expires_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined };
@@ -382,10 +425,13 @@ export class PostgresStore {
     } catch (error) { await client.query("rollback"); throw error; } finally { client.release(); }
   }
 
-  async sendMessage(input: { conversationId: string; actor: "bot" | "operator"; text: string; idempotencyKey: string; attachmentIds?: string[]; nativeAttachmentRefs?: string[]; buttons?: DeliveryButton[] }, workspace = "ws_demo") {
+  async sendMessage(input: { conversationId: string; actor: "bot" | "operator"; text: string; idempotencyKey: string; attachmentIds?: string[]; nativeAttachmentRefs?: string[]; nativeAttachments?: NativeAttachmentInput[]; buttons?: DeliveryButton[] }, workspace = "ws_demo") {
     if (!input.idempotencyKey) throw new DomainError(400, "Idempotency-Key is required", "idempotency_required");
     const attachmentIds = [...new Set(input.attachmentIds ?? [])];
-    const nativeAttachmentRefs = [...new Set((input.nativeAttachmentRefs ?? []).map((item) => item.trim()).filter(Boolean))];
+    if (input.nativeAttachments !== undefined && !Array.isArray(input.nativeAttachments)) throw new DomainError(400, "Native attachments must be an array", "invalid_native_attachment");
+    if ((input.nativeAttachments?.length ?? 0) > MAX_NATIVE_ATTACHMENTS_PER_MESSAGE) throw new DomainError(400, `A message can contain at most ${MAX_NATIVE_ATTACHMENTS_PER_MESSAGE} native attachments`, "too_many_native_attachments");
+    const nativeAttachments = (input.nativeAttachments ?? []).map(normalizeNativeAttachment);
+    const nativeAttachmentRefs = [...new Set([...(input.nativeAttachmentRefs ?? []).map((item) => item.trim()).filter(Boolean), ...nativeAttachments.map((item) => item.ref)])];
     if (!input.text.trim() && !attachmentIds.length && !nativeAttachmentRefs.length) throw new DomainError(400, "Message text or attachment is required", "empty_message");
     if (attachmentIds.length > MAX_ATTACHMENTS_PER_MESSAGE) throw new DomainError(400, `A message can contain at most ${MAX_ATTACHMENTS_PER_MESSAGE} attachments`, "too_many_attachments");
     if (nativeAttachmentRefs.length > MAX_NATIVE_ATTACHMENTS_PER_MESSAGE) throw new DomainError(400, `A message can contain at most ${MAX_NATIVE_ATTACHMENTS_PER_MESSAGE} native attachments`, "too_many_native_attachments");
@@ -411,7 +457,7 @@ export class PostgresStore {
         uploads = uploadResult.rows;
         if (uploads.length !== attachmentIds.length || uploads.some((row) => !["UPLOADED", "ATTACHED"].includes(row.status))) throw new DomainError(409, "Every attachment must be uploaded and belong to this workspace", "attachment_not_ready");
       }
-      const result = await client.query("insert into messages(workspace_id,conversation_id,event_id,direction,actor_type,text_content,payload,status,occurred_at) values($1,$2,$3,'OUTBOUND',$4,$5,$6,'QUEUED',now()) returning *", [workspaceId, input.conversationId, input.idempotencyKey, input.actor, input.text.trim(), JSON.stringify({ buttons: input.buttons ?? [], nativeAttachmentRefs })]);
+      const result = await client.query("insert into messages(workspace_id,conversation_id,event_id,direction,actor_type,text_content,payload,status,occurred_at) values($1,$2,$3,'OUTBOUND',$4,$5,$6,'QUEUED',now()) returning *", [workspaceId, input.conversationId, input.idempotencyKey, input.actor, input.text.trim(), JSON.stringify({ buttons: input.buttons ?? [], nativeAttachmentRefs, nativeAttachments })]);
       const attached: AttachmentRecord[] = [];
       for (const upload of uploads) {
         const attachment = await client.query("insert into attachments(workspace_id,message_id,object_key,filename,mime_type,byte_size,sha256) values($1,$2,$3,$4,$5,$6,$7) returning *", [workspaceId, result.rows[0].id, upload.object_key, upload.filename, upload.mime_type, upload.byte_size, upload.sha256]);

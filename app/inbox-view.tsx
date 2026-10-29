@@ -2,8 +2,8 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, Bot, Check, CheckCheck, ChevronDown, Circle, Mail, MessageCircle,
-  Mic, MoreHorizontal, Paperclip, Pause, Phone, Plus, RefreshCw,
+  AlertTriangle, Bot, Check, CheckCheck, ChevronDown, Circle, FileText, Image as ImageIcon, Mail, MessageCircle,
+  Mic, MoreHorizontal, Paperclip, Pause, Phone, Play, Plus, RefreshCw,
   Search, Send, SlidersHorizontal, Smile, User, X,
 } from "lucide-react";
 import { ApiAttachment, ApiPipeline, botcrmApi } from "./api-client";
@@ -163,16 +163,34 @@ function Avatar({ item, size = "md" }: { item: InboxConversation; size?: "sm" | 
 function formatMoney(value: number) { return new Intl.NumberFormat("ru-RU").format(value) + " ₽"; }
 function formatBytes(value: number) { if (value < 1024) return `${value} Б`; if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} КБ`; return `${(value / 1024 / 1024).toFixed(1)} МБ`; }
 function displayAttribute(value: unknown) { if (value == null) return "—"; if (Array.isArray(value)) return value.join(", "); if (typeof value === "object") return JSON.stringify(value); if (typeof value === "boolean") return value ? "Да" : "Нет"; return String(value); }
+async function loadNativePreview(botSlug: string, yandexPath: string) {
+  try { return await botcrmApi.contentDiskPreview(botSlug, yandexPath); }
+  catch { await new Promise((resolve) => window.setTimeout(resolve, 700)); return botcrmApi.contentDiskPreview(botSlug, yandexPath); }
+}
 
-function MessageAttachment({ attachment }: { attachment: ApiAttachment & { previewUrl?: string } }) {
+function MessageAttachment({ attachment, botSlug }: { attachment: ApiAttachment & { previewUrl?: string }; botSlug: string }) {
   const [url, setUrl] = useState(attachment.previewUrl || "");
   const [failed, setFailed] = useState(false);
   useEffect(() => {
+    setUrl(attachment.previewUrl || "");
+    setFailed(false);
     if (attachment.previewUrl) return;
     let active = true;
-    void botcrmApi.attachmentUrl(attachment.id).then((result) => { if (active) setUrl(result.url); }).catch(() => { if (active) setFailed(true); });
-    return () => { active = false; };
-  }, [attachment.id, attachment.previewUrl]);
+    let objectUrl = "";
+    const load = attachment.source === "vk_native"
+      ? attachment.yandexPath ? loadNativePreview(botSlug, attachment.yandexPath).then((blob) => { objectUrl = URL.createObjectURL(blob); return objectUrl; }) : Promise.resolve("")
+      : botcrmApi.attachmentUrl(attachment.id).then((result) => result.url);
+    void load.then((nextUrl) => { if (active) setUrl(nextUrl); }).catch(() => { if (active) setFailed(true); });
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [attachment.id, attachment.previewUrl, attachment.source, attachment.yandexPath, botSlug]);
+  if (attachment.source === "vk_native") {
+    const kind = attachment.mediaKind || "document";
+    const NativeIcon = kind === "photo" ? ImageIcon : kind === "video" ? Play : kind === "audio" ? Mic : FileText;
+    return <a className={`attachment-card native-media ${kind} ${failed ? "failed" : ""}`} href={attachment.externalUrl} target="_blank" rel="noreferrer">
+      <span className="native-media-preview">{url ? <img src={url} alt={attachment.filename} /> : <span className="native-media-placeholder"><NativeIcon size={26} /></span>}{kind === "video" && <i><Play size={18} fill="currentColor" /></i>}</span>
+      <span className="native-media-caption"><b>{attachment.filename}</b><small>{failed ? "Обложка временно недоступна" : kind === "video" ? "Видео ВКонтакте" : kind === "photo" ? "Фотография ВКонтакте" : "Вложение ВКонтакте"}</small></span>
+    </a>;
+  }
   if (attachment.mimeType.startsWith("image/")) return <a className="attachment-card image" href={url || undefined} target="_blank" rel="noreferrer">{url ? <img src={url} alt={attachment.filename} /> : <span className="attachment-loading"><RefreshCw className="spin" size={18} />Загрузка…</span>}<small>{attachment.filename}{attachment.byteSize > 0 ? ` · ${formatBytes(attachment.byteSize)}` : ""}</small></a>;
   if (attachment.mimeType.startsWith("video/") && url) return <div className="attachment-card media"><video controls preload="metadata" src={url} /><small>{attachment.filename}</small></div>;
   if (attachment.mimeType.startsWith("audio/") && url) return <div className="attachment-card audio"><audio controls preload="metadata" src={url} /><small>{attachment.filename}</small></div>;
@@ -321,7 +339,7 @@ export function InboxView(props: Props) {
     {selected ? <>
     <section className="chat-panel">
       <div className="chat-header"><div className="chat-person"><Avatar item={selected} size="sm" /><div><div><strong>{selected.name}</strong>{selected.online && <span className="online-label">в сети</span>}</div><p><ChannelBadge channel={selected.channel} compact /> через {selected.bot}</p></div></div><div className="chat-actions"><ControlButton mode={selected.mode} setMode={setMode} /><div className="popover-anchor"><button className="icon-button" onClick={() => setChatMenu(!chatMenu)} aria-label="Действия с диалогом"><MoreHorizontal size={18} /></button>{chatMenu && <div className="action-popover"><button onClick={() => { setChatMenu(false); setMode("HUMAN"); }}><User size={15} />Передать оператору</button><button onClick={() => { setChatMenu(false); setMode("BOT"); }}><Bot size={15} />Вернуть боту</button><button onClick={() => { setChatMenu(false); setMode("PAUSED"); }}><Pause size={15} />Поставить на паузу</button><button onClick={() => { setChatMenu(false); editContact(); }}><MoreHorizontal size={15} />Открыть карточку</button></div>}</div><button className="icon-button close-conversation" onClick={closeConversation} aria-label="Закрыть диалог" title="Закрыть диалог"><X size={18} /></button></div></div>
-      <div className="chat-scroll" ref={chatScrollRef} onScroll={handleChatScroll}><div className="date-divider"><span>Сегодня</span></div>{messages.map((message) => message.side === "system" ? <div className="system-message" key={message.id}><span>{message.text}</span><time>{message.time}</time></div> : <div className={`message-wrap ${message.side}`} key={message.id}>{message.side === "in" && <Avatar item={selected} size="sm" />}<div><div className={`message-bubble ${message.attachments?.length ? "with-attachments" : ""}`}>{message.text && <div className="message-text">{message.text}</div>}{message.attachments?.map((attachment) => <MessageAttachment key={attachment.id} attachment={attachment} />)}</div><p>{message.author && <span>{message.author}</span>}<time>{message.time}</time>{message.status && <MessageReceipt status={message.status} channel={selected.channel} direction={message.side} />}</p></div></div>)}</div>
+      <div className="chat-scroll" ref={chatScrollRef} onScroll={handleChatScroll}><div className="date-divider"><span>Сегодня</span></div>{messages.map((message) => message.side === "system" ? <div className="system-message" key={message.id}><span>{message.text}</span><time>{message.time}</time></div> : <div className={`message-wrap ${message.side}`} key={message.id}>{message.side === "in" && <Avatar item={selected} size="sm" />}<div><div className={`message-bubble ${message.attachments?.length ? "with-attachments" : ""}`}>{message.text && <div className="message-text">{message.text}</div>}{message.attachments?.map((attachment) => <MessageAttachment key={attachment.id} attachment={attachment} botSlug={selected.bot} />)}</div><p>{message.author && <span>{message.author}</span>}<time>{message.time}</time>{message.status && <MessageReceipt status={message.status} channel={selected.channel} direction={message.side} />}</p></div></div>)}</div>
       {showJumpToLatest && <button type="button" className="chat-jump-latest" onClick={jumpToLatest}><ChevronDown size={16} />К новым сообщениям</button>}
       <form className="composer" onSubmit={sendMessage}>
         {selected.mode === "BOT" && <button type="button" className="bot-writing" onClick={() => setMode("HUMAN")}><Bot size={15} />Сейчас отвечает бот · нажмите, чтобы перехватить</button>}

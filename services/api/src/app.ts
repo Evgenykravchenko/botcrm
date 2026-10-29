@@ -1,7 +1,7 @@
 import { ArgumentsHost, Body, Catch, Controller, Delete, ExceptionFilter, Get, Header, Headers, HttpException, Inject, Injectable, Module, OnModuleDestroy, OnModuleInit, Optional, Param, Patch, Post, Query, Req, Res, Sse } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { ApiBody, ApiHeader, ApiOperation, ApiParam, ApiTags } from "@nestjs/swagger";
-import { BotCrmCore, Channel, ControlMode, DeliveryButton, DomainError, NormalizedEvent } from "./core.js";
+import { BotCrmCore, Channel, ControlMode, DeliveryButton, DomainError, NativeAttachmentInput, NormalizedEvent } from "./core.js";
 import { enrichProfileAvatar, getAdapter, verifySignature } from "./connectors.js";
 import { PostgresStore } from "./postgres-store.js";
 import { CampaignQueueService } from "./campaign-queue.js";
@@ -496,7 +496,7 @@ export class ApiController {
   @Post("messages/send")
   @Roles("SERVICE", "OWNER", "ADMIN", "SUPERVISOR", "OPERATOR")
   @ApiOperation({ summary: "Queue an operator or bot outbound message" })
-  async sendMessage(@Body() body: { conversationId: string; actor: "bot" | "operator"; text: string; attachmentIds?: string[]; nativeAttachmentRefs?: string[]; buttons?: DeliveryButton[] }, @Headers("idempotency-key") idempotencyKey: string, @Headers() headers: Record<string, string | undefined>) {
+  async sendMessage(@Body() body: { conversationId: string; actor: "bot" | "operator"; text: string; attachmentIds?: string[]; nativeAttachmentRefs?: string[]; nativeAttachments?: NativeAttachmentInput[]; buttons?: DeliveryButton[] }, @Headers("idempotency-key") idempotencyKey: string, @Headers() headers: Record<string, string | undefined>) {
     this.authorize(headers);
     const workspace = this.workspace(headers);
     const result: any = await this.core.sendMessage({ ...body, idempotencyKey }, workspace);

@@ -37,6 +37,10 @@ export interface ApiAttachment {
   byteSize: number;
   createdAt: string;
   previewUrl?: string;
+  source?: "storage" | "external" | "vk_native";
+  mediaKind?: "photo" | "video" | "audio" | "document";
+  yandexPath?: string;
+  externalUrl?: string;
 }
 
 export interface ApiMediaUpload extends ApiAttachment {

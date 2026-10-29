@@ -69,6 +69,17 @@ export interface AttachmentRecord {
   byteSize: number;
   createdAt: string;
   previewUrl?: string;
+  source?: "storage" | "external" | "vk_native";
+  mediaKind?: "photo" | "video" | "audio" | "document";
+  yandexPath?: string;
+  externalUrl?: string;
+}
+
+export interface NativeAttachmentInput {
+  ref: string;
+  kind: "photo" | "video" | "audio" | "document";
+  name?: string;
+  yandexPath?: string;
 }
 
 export interface DeliveryButton {
@@ -230,14 +241,14 @@ export class BotCrmCore {
     return updated;
   }
 
-  sendMessage(input: { conversationId: string; actor: "bot" | "operator"; text: string; idempotencyKey: string; attachmentIds?: string[]; nativeAttachmentRefs?: string[]; buttons?: DeliveryButton[] }, workspaceId?: string) {
+  sendMessage(input: { conversationId: string; actor: "bot" | "operator"; text: string; idempotencyKey: string; attachmentIds?: string[]; nativeAttachmentRefs?: string[]; nativeAttachments?: NativeAttachmentInput[]; buttons?: DeliveryButton[] }, workspaceId?: string) {
     if (!input.idempotencyKey) throw new DomainError(400, "Idempotency-Key is required", "idempotency_required");
     const conversation = this.conversations.get(input.conversationId); if (!conversation || (workspaceId && conversation.workspaceId !== workspaceId)) throw new DomainError(404, "Conversation not found", "conversation_not_found");
     const duplicate = (this.messages.get(input.conversationId) ?? []).find((message) => message.eventId === input.idempotencyKey); if (duplicate) return { duplicate: true, message: duplicate };
     if (input.actor === "bot" && conversation.mode !== "BOT") throw new DomainError(409, "Bot is not in control of this conversation", "bot_not_in_control");
-    if (!input.text.trim() && !input.attachmentIds?.length) throw new DomainError(400, "Message text or attachment is required", "empty_message");
+    if (!input.text.trim() && !input.attachmentIds?.length && !input.nativeAttachmentRefs?.length && !input.nativeAttachments?.length) throw new DomainError(400, "Message text or attachment is required", "empty_message");
     if (input.attachmentIds?.length) throw new DomainError(503, "Persistent storage is required for attachments", "persistent_storage_required");
-    const message: MessageRecord = { id: randomUUID(), eventId: input.idempotencyKey, conversationId: input.conversationId, direction: "outbound", actor: input.actor, text: input.text, status: "queued", attachments: [], createdAt: new Date().toISOString() };
+    const message: MessageRecord = { id: randomUUID(), eventId: input.idempotencyKey, conversationId: input.conversationId, direction: "outbound", actor: input.actor, text: input.text, status: "queued", attachments: (input.nativeAttachments ?? []).map((item, index) => ({ id: `native:${index}`, filename: item.name || "Вложение VK", mimeType: item.kind === "photo" ? "image/jpeg" : `application/vnd.vk.${item.kind}`, byteSize: 0, createdAt: new Date().toISOString(), source: "vk_native", mediaKind: item.kind, yandexPath: item.yandexPath })), createdAt: new Date().toISOString() };
     this.messages.set(input.conversationId, [...(this.messages.get(input.conversationId) ?? []), message]);
     return { duplicate: false, message };
   }
