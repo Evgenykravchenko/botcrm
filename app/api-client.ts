@@ -212,7 +212,7 @@ export interface ApiYandexDiskItem { name: string; path: string; type: "file" | 
 export interface ApiYandexDiskListing { root: string; path: string; items: ApiYandexDiskItem[]; }
 export interface ApiKeywordReplySettings { unknownMessage: string; fallbackResponseId?: number; }
 export class ApiError extends Error {
-  constructor(public readonly status: number, public readonly code: string, message: string) {
+  constructor(public readonly status: number, public readonly code: string, message: string, public readonly retryAt?: number) {
     super(message);
   }
 }
@@ -227,25 +227,93 @@ function apiBase() {
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:4100/api/v1";
 }
 
-async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 8_000): Promise<T> {
+const pendingReads = new Map<string, Promise<unknown>>();
+const rateLimitDeadlines = new Map<string, number>();
+const rateLimitListeners = new Set<() => void>();
+
+export function subscribeToApiRateLimit(listener: () => void) {
+  rateLimitListeners.add(listener);
+  return () => { rateLimitListeners.delete(listener); };
+}
+
+function requestScope(path: string) {
+  const token = typeof window === "undefined" ? "" : window.localStorage.getItem("botcrm_auth_token") || "";
+  // Login has its own server-side bucket; a busy workspace must not block it.
+  return JSON.stringify([apiBase(), token, path === "/auth/login" ? "login" : "api"]);
+}
+
+export function apiRetryAt(path = "") {
+  const scope = requestScope(path);
+  const deadline = rateLimitDeadlines.get(scope) || 0;
+  if (deadline <= Date.now()) { rateLimitDeadlines.delete(scope); return 0; }
+  return deadline;
+}
+
+function rateLimitError(retryAt: number) {
+  const seconds = Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
+  return new ApiError(429, "rate_limited", `Слишком частое обновление. Повторите через ${seconds} с.`, retryAt);
+}
+
+function checkRateLimit(path: string) {
+  const deadline = apiRetryAt(path);
+  if (deadline) throw rateLimitError(deadline);
+}
+
+function responseError(response: Response, scope: string, payload: { error?: { code?: string; message?: string } } | null) {
+  if (response.status === 429) {
+    const value = response.headers.get("retry-after");
+    const now = Date.now();
+    const delay = value && /^\d+(?:\.\d+)?$/.test(value.trim()) ? Number(value) * 1000 : value ? Date.parse(value) - now : NaN;
+    const retryAt = Math.max(rateLimitDeadlines.get(scope) || 0, now + (Number.isFinite(delay) && delay >= 0 ? Math.max(1000, delay) : 5000));
+    rateLimitDeadlines.set(scope, retryAt);
+    if (scope === requestScope("")) for (const listener of rateLimitListeners) listener();
+    return rateLimitError(retryAt);
+  }
+  return new ApiError(response.status, payload?.error?.code || "request_failed", payload?.error?.message || `API returned ${response.status}`);
+}
+
+function request<T>(path: string, init: RequestInit = {}, timeoutMs = 8_000): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("accept", "application/json");
   headers.set("x-workspace-id", "ws_demo");
   if (typeof window !== "undefined") { const token = window.localStorage.getItem("botcrm_auth_token"); if (token) headers.set("authorization", `Bearer ${token}`); }
   if (init.body) headers.set("content-type", "application/json");
-  const response = await fetch(`${apiBase()}${path}`, { ...init, headers, signal: AbortSignal.timeout(timeoutMs) });
-  const payload = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
-  if (!response.ok) throw new ApiError(response.status, payload?.error?.code || "request_failed", payload?.error?.message || `API returned ${response.status}`);
-  return payload as T;
+  const scope = requestScope(path);
+  const method = (init.method || "GET").toUpperCase();
+  const mutation = !["GET", "HEAD", "OPTIONS"].includes(method);
+  const key = !init.signal && method === "GET" ? JSON.stringify([scope, path, [...headers]]) : "";
+  const existing = key ? pendingReads.get(key) : undefined;
+  if (existing) return existing as Promise<T>;
+  if (mutation) pendingReads.clear();
+  const promise = (async () => {
+    try {
+      checkRateLimit(path);
+      const response = await fetch(`${apiBase()}${path}`, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(timeoutMs) });
+      const payload = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
+      if (!response.ok) throw responseError(response, scope, payload);
+      return payload as T;
+    } finally {
+      // Reads begun before or during a write cannot satisfy its refresh.
+      if (mutation) pendingReads.clear();
+    }
+  })();
+  if (key) {
+    pendingReads.set(key, promise);
+    const clear = () => { if (pendingReads.get(key) === promise) pendingReads.delete(key); };
+    void promise.then(clear, clear);
+  }
+  return promise;
 }
 
 async function requestBlob(path: string) {
+  checkRateLimit(path);
+  const scope = requestScope(path);
   const headers = new Headers({ accept: "image/*", "x-workspace-id": "ws_demo" });
   if (typeof window !== "undefined") { const token = window.localStorage.getItem("botcrm_auth_token"); if (token) headers.set("authorization", `Bearer ${token}`); }
   const response = await fetch(`${apiBase()}${path}`, { headers, signal: AbortSignal.timeout(20_000) });
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
-    throw new ApiError(response.status, payload?.error?.code || "request_failed", payload?.error?.message || `API returned ${response.status}`);
+    throw responseError(response, scope, payload);
   }
   return response.blob();
 }
@@ -260,8 +328,12 @@ function cachedDiskPreview(botSlug: string, path: string) {
   const cached = diskPreviewCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.promise;
   const entry = { promise: Promise.resolve(new Blob()), expiresAt: Date.now() + 120_000, size: 0 };
-  entry.promise = requestBlob(`/keyword-replies/media/preview?botSlug=${encodeURIComponent(botSlug)}&path=${encodeURIComponent(path)}`).catch(async () => {
-    await new Promise((resolve) => window.setTimeout(resolve, 700));
+  entry.promise = requestBlob(`/keyword-replies/media/preview?botSlug=${encodeURIComponent(botSlug)}&path=${encodeURIComponent(path)}`).catch(async (error) => {
+    if (error instanceof ApiError && [401, 403, 404].includes(error.status)) throw error;
+    const delay = error instanceof ApiError && error.status === 429 ? Math.max(1000, (error.retryAt || Date.now() + 5000) - Date.now()) : 700;
+    await new Promise((resolve) => window.setTimeout(resolve, Math.min(2_147_000_000, delay)));
+    const currentSession = `${apiBase()}:${window.localStorage.getItem("botcrm_auth_token") || ""}`;
+    if (session !== currentSession) throw new DOMException("Preview session changed", "AbortError");
     return requestBlob(`/keyword-replies/media/preview?botSlug=${encodeURIComponent(botSlug)}&path=${encodeURIComponent(path)}`);
   }).then((blob) => {
     entry.size = blob.size;
@@ -279,11 +351,12 @@ function cachedDiskPreview(botSlug: string, path: string) {
 
 export function setAuthToken(token?: string) {
   if (typeof window === "undefined") return;
+  pendingReads.clear(); rateLimitDeadlines.clear();
   if (token) window.localStorage.setItem("botcrm_auth_token", token);
   else window.localStorage.removeItem("botcrm_auth_token");
 }
 
-export type ApiRealtimeStatus = "connecting" | "live" | "offline";
+export type ApiRealtimeStatus = "connecting" | "live" | "rate-limited" | "offline";
 export interface ApiRealtimeEvent {
   type: "change";
   workspaceId: string;
@@ -305,11 +378,14 @@ export function subscribeToRealtime(onEvent: (event: ApiRealtimeEvent) => void, 
     controller = new AbortController();
     onStatus("connecting");
     try {
+      checkRateLimit("/realtime");
+      const scope = requestScope("/realtime");
       const headers = new Headers({ accept: "text/event-stream", "x-workspace-id": "ws_demo" });
       const token = window.localStorage.getItem("botcrm_auth_token");
       if (token) headers.set("authorization", `Bearer ${token}`);
       const response = await fetch(`${apiBase()}/realtime`, { headers, signal: controller.signal, cache: "no-store" });
-      if (!response.ok || !response.body) throw new ApiError(response.status, "realtime_unavailable", `Realtime returned ${response.status}`);
+      if (!response.ok) throw responseError(response, scope, null);
+      if (!response.body) throw new ApiError(response.status, "realtime_unavailable", "Realtime stream is unavailable");
       onStatus("live");
       retryDelay = 1_000;
       const reader = response.body.getReader();
@@ -333,8 +409,9 @@ export function subscribeToRealtime(onEvent: (event: ApiRealtimeEvent) => void, 
       if (!stopped) throw new Error("Realtime stream ended");
     } catch (error) {
       if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;
-      onStatus("offline");
-      retryTimer = window.setTimeout(() => void connect(), retryDelay);
+      const limited = error instanceof ApiError && error.status === 429;
+      onStatus(limited ? "rate-limited" : "offline");
+      retryTimer = window.setTimeout(() => void connect(), Math.min(2_147_000_000, Math.max(retryDelay, (limited ? error.retryAt || 0 : 0) - Date.now())));
       retryDelay = Math.min(15_000, retryDelay * 2);
     }
   };

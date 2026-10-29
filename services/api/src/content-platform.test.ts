@@ -5,7 +5,62 @@ import { RealtimeService } from "./realtime.js";
 import { ContentMediaProgressService, validateMediaProgress } from "./content-media-progress.js";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
+import { PostgresStore } from "./postgres-store.js";
 import { filter, firstValueFrom, timeout } from "rxjs";
+
+test("repeated and concurrent legacy syncs do not rewrite profiles or emit bot changes", { skip: !process.env.DATABASE_URL }, async () => {
+  const databaseUrl = process.env.DATABASE_URL!;
+  const pool = new Pool({ connectionString: databaseUrl });
+  const store = new PostgresStore(databaseUrl);
+  const workspace = randomUUID();
+  const listener = await pool.connect();
+  const events: Array<{ workspaceId?: string; entity?: string; marker?: string }> = [];
+  listener.on("notification", (message) => { if (message.payload) events.push(JSON.parse(message.payload)); });
+  const barrier = async () => {
+    const marker = randomUUID();
+    let timer: ReturnType<typeof setTimeout>;
+    const arrived = new Promise<void>((resolve, reject) => {
+      const receive = (message: { payload?: string }) => {
+        if (message.payload === JSON.stringify({ marker })) { clearTimeout(timer); listener.off("notification", receive); resolve(); }
+      };
+      listener.on("notification", receive);
+      timer = setTimeout(() => { listener.off("notification", receive); reject(new Error("Notification barrier timed out")); }, 3000);
+    });
+    await pool.query("select pg_notify('botcrm_realtime',$1)", [JSON.stringify({ marker })]);
+    await arrived;
+  };
+  const state = async () => (await pool.query("select b.id,b.name,b.xmin::text bot_revision,p.xmin::text profile_revision,p.yandex_root from bots b join bot_content_profiles p on p.bot_id=b.id where b.workspace_id=$1", [workspace])).rows[0];
+  const binding = { botSlug: "library_bot", contentBotKey: `library-${workspace}`, channel: "vk", yandexRoot: "/bot_crm/library_bot" };
+  try {
+    await pool.query("insert into workspaces(id,name) values($1,'Legacy sync regression')", [workspace]);
+    await listener.query("listen botcrm_realtime");
+    await store.syncContentProfiles(workspace, [binding]);
+    await barrier();
+    const before = await state();
+    events.length = 0;
+    const profiles = await Promise.all(Array.from({ length: 6 }, () => store.syncContentProfiles(workspace, [binding])));
+    await barrier();
+    assert.ok(profiles.every((items) => items.length === 1 && items[0].botId === before.id));
+    assert.deepEqual(await state(), before, "unchanged profiles must retain their PostgreSQL row versions");
+    assert.equal(events.filter((event) => event.workspaceId === workspace).length, 0, "reads must not trigger workspace reloads");
+    await store.syncContentProfiles(workspace, [{ ...binding, label: "Updated library" }]);
+    await barrier();
+    assert.equal((await state()).name, "Updated library");
+    assert.equal(events.filter((event) => event.workspaceId === workspace && event.entity === "bots").length, 1, "a real name change still reaches realtime");
+    events.length = 0;
+    await store.syncContentProfiles(workspace, [{ ...binding, label: "Another legacy name", yandexRoot: "/bot_crm/new_root" }]);
+    await barrier();
+    const changed = await state();
+    assert.equal(changed.name, "Updated library", "legacy sync must preserve the editor's existing name");
+    assert.equal(changed.yandex_root, "/bot_crm/new_root");
+    assert.equal(events.filter((event) => event.workspaceId === workspace && event.entity === "bots").length, 0);
+  } finally {
+    await listener.query("unlisten botcrm_realtime"); listener.release();
+    await store.close();
+    await pool.query("delete from workspaces where id=$1", [workspace]);
+    await pool.end();
+  }
+});
 
 test("media progress validates estimates and ignores unknown properties", () => {
   const value = { attemptId: randomUUID(), stage: "transferring", transferredBytes: 40, totalBytes: 100, bytesPerSecond: 10, etaSeconds: 6 };

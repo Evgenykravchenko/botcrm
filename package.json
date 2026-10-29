@@ -1,6 +1,6 @@
 {
     "name": "botcrm-monorepo",
-    "version": "0.7.1",
+    "version": "0.7.2",
     "private": true,
     "license": "AGPL-3.0-only",
     "description": "Self-hosted CRM и единый центр управления для самописных ботов",
@@ -27,7 +27,7 @@
         "dev": "vinext dev",
         "build": "vinext build",
         "start": "vinext start",
-        "test": "npm run build && node --test tests/rendered-html.test.mjs tests/migrate-failure.test.mjs tests/configure-yandex.test.mjs",
+        "test": "npm run build && npm run test:client && node --test tests/rendered-html.test.mjs tests/migrate-failure.test.mjs tests/configure-yandex.test.mjs",
         "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
         "db:generate": "drizzle-kit generate",
         "db:migrate:realtime": "node --env-file=.env infra/scripts/apply-migration.mjs infra/migrations/007_realtime_notifications.sql",
@@ -75,7 +75,8 @@
         "testbot:telegram:check": "node --env-file=.env --import tsx examples/telegram-test-bot/src/main.ts --bot-check",
         "testbot:vk": "node --env-file=.env --import tsx examples/vk-test-bot/src/main.ts",
         "testbot:vk:check": "node --env-file=.env --import tsx examples/vk-test-bot/src/main.ts --bot-check",
-        "testbot:test": "node --import tsx --test examples/test-bot-scenarios.test.ts"
+        "testbot:test": "node --import tsx --test examples/test-bot-scenarios.test.ts",
+        "test:client": "node --import tsx --test tests/api-client.test.ts"
     },
     "dependencies": {
         "drizzle-orm": "0.45.4",
