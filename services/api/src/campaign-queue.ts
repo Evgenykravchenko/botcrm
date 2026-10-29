@@ -31,6 +31,11 @@ export class CampaignQueueService implements OnModuleInit, OnModuleDestroy {
   }
   async onModuleDestroy() { await Promise.all([this.campaignQueue?.close(), this.messageQueue?.close(), this.botEventQueue?.close()]); }
   status() { return { status: this.campaignQueue && this.messageQueue && this.botEventQueue ? "ok" : "unavailable", error: this.error }; }
+  async ready() {
+    const queues = [this.campaignQueue, this.messageQueue, this.botEventQueue];
+    if (queues.some((queue) => !queue)) return false;
+    return (await Promise.all(queues.map(async (queue) => (await queue!.client).status === "ready"))).every(Boolean);
+  }
   async enqueue(jobs: CampaignJob[]) {
     if (!this.campaignQueue) throw new DomainError(503, "Campaign queue is unavailable", "queue_unavailable");
     if (!jobs.length) return { queued: 0 };

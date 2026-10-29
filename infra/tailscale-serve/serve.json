@@ -1,9 +1,7 @@
 {
   "TCP": {
     "443": {
-      "TCPForward": "botcrm-edge-1:8081",
-      "TerminateTLS": "${TS_CERT_DOMAIN}",
-      "ProxyProtocol": 2
+      "HTTPS": true
     },
     "8443": {
       "HTTPS": true
@@ -14,6 +12,13 @@
       "Handlers": {
         "/": {
           "Proxy": "http://minio:9000"
+        }
+      }
+    },
+    "${TS_CERT_DOMAIN}:443": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://botcrm-edge-1:8080"
         }
       }
     }

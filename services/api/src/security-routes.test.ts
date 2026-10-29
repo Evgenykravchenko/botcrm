@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PUBLIC_ROUTE, ROLES_ROUTE } from "./auth.js";
+import { DomainError } from "./core.js";
 import { AdminController, ApiController, AuthController, BotContentRuntimeController, KeywordRepliesController, RealtimeController, SystemController } from "./app.js";
 
 function metadata(key: string, target: object, method: string) {
@@ -11,6 +12,7 @@ function metadata(key: string, target: object, method: string) {
 
 test("only operationally required endpoints are public", () => {
   assert.equal(metadata(PUBLIC_ROUTE, SystemController.prototype, "health"), true);
+  assert.equal(metadata(PUBLIC_ROUTE, SystemController.prototype, "ready"), true);
   assert.equal(metadata(PUBLIC_ROUTE, AuthController.prototype, "login"), true);
   assert.equal(metadata(PUBLIC_ROUTE, ApiController.prototype, "verifyWhatsApp"), true);
   assert.equal(metadata(PUBLIC_ROUTE, ApiController.prototype, "receiveWebhook"), true);
@@ -20,6 +22,17 @@ test("only operationally required endpoints are public", () => {
   assert.deepEqual(metadata(ROLES_ROUTE, SystemController.prototype, "metrics"), ["OWNER", "ADMIN", "SUPERVISOR", "SERVICE"]);
   assert.equal(metadata(PUBLIC_ROUTE, SystemController.prototype, "capabilities"), undefined);
   assert.equal(metadata(PUBLIC_ROUTE, AuthController.prototype, "me"), undefined);
+});
+
+test("release readiness requires both database and queue dependencies", async () => {
+  const core = { health: async () => ({ status: "ok" }) };
+  const queue = { ready: async () => false };
+  const controller = new SystemController(core as any, queue as any);
+  await assert.rejects(() => controller.ready(), (error: unknown) => error instanceof DomainError && error.status === 503);
+  queue.ready = async () => true;
+  assert.equal((await controller.ready()).status, "ok");
+  core.health = async () => ({ status: "unavailable" });
+  await assert.rejects(() => controller.ready(), (error: unknown) => error instanceof DomainError && error.status === 503);
 });
 
 test("RBAC metadata matches the product role matrix", () => {

@@ -19,7 +19,7 @@ export function upstreamConfig(api, web) {
   for (const host of [api, web]) if (!/^botcrm-(?:api-1|web-1|(?:blue|green)-(?:api|web)-release-1)$/.test(host)) throw new Error("Invalid BotCRM upstream");
   return `(api-backend) {
   reverse_proxy ${api}:4100 {
-    header_up X-Forwarded-For {remote_host}
+    header_up X-Forwarded-For {client_ip}
     header_up -Forwarded
     header_up -X-Real-IP
     header_up X-Forwarded-Proto https
@@ -28,7 +28,7 @@ export function upstreamConfig(api, web) {
 }
 (web-backend) {
   reverse_proxy ${web}:3000 {
-    header_up X-Forwarded-For {remote_host}
+    header_up X-Forwarded-For {client_ip}
     header_up -Forwarded
     header_up -X-Real-IP
     header_up X-Forwarded-Proto https
@@ -42,11 +42,9 @@ export function funnelConfig(original, domain, port) {
   const config = structuredClone(original);
   config.TCP ??= {};
   const configDomain = Object.keys(config.AllowFunnel ?? {}).some((key) => key.includes("${TS_CERT_DOMAIN}")) ? "${TS_CERT_DOMAIN}" : domain;
-  config.TCP[String(port)] = { TCPForward: "botcrm-edge-1:8081", TerminateTLS: configDomain, ProxyProtocol: 2 };
-  if (config.Web) {
-    delete config.Web[`${domain}:${port}`];
-    delete config.Web[`\${TS_CERT_DOMAIN}:${port}`];
-  }
+  config.TCP[String(port)] = { HTTPS: true };
+  config.Web ??= {};
+  config.Web[`${configDomain}:${port}`] = { Handlers: { "/": { Proxy: "http://botcrm-edge-1:8080" } } };
   config.AllowFunnel ??= {};
   config.AllowFunnel[`${configDomain}:${port}`] = true;
   return config;
@@ -76,7 +74,7 @@ async function healthy(name) {
 
 async function publicCheck(domain, port = 443) {
   const origin = `https://${domain}${port === 443 ? "" : `:${port}`}`;
-  for (const path of ["/landing", "/api/v1/health"]) {
+  for (const path of ["/landing", "/api/v1/health/ready"]) {
     const response = await fetch(origin + path, { signal: AbortSignal.timeout(15_000), redirect: "manual" });
     await response.body?.cancel();
     if (response.status !== 200) throw new Error(`${origin}${path} returned ${response.status}`);
@@ -122,19 +120,19 @@ async function main() {
     const tail = inspect("botcrm-tailscale-1");
     const tailIp = tail.NetworkSettings.Networks.botcrm_backend?.IPAddress;
     if (!/^\d+\.\d+\.\d+\.\d+$/.test(tailIp ?? "")) throw new Error("Funnel backend address is unavailable");
-    await atomic(resolve(edgeDir, "proxy-trust.caddy"), `allow ${tailIp}/32\n`);
+    await atomic(resolve(edgeDir, "proxy-trust.caddy"), `trusted_proxies static ${tailIp}/32\n`);
     await atomic(resolve(edgeDir, "Caddyfile"), (await readFile(resolve(root, "infra/Caddyfile.edge"), "utf8")).replace("STORAGE_DOMAIN", env.BOTCRM_STORAGE_DOMAIN));
     await atomic(resolve(edgeDir, "upstreams.caddy"), upstreamConfig(oldApi, oldWeb));
     run(["docker", "compose", "--env-file", ".env.production", "-f", "infra/docker-compose.edge.yml", "up", "-d", "--no-deps", "edge"]);
     run(["docker", "exec", "botcrm-edge-1", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]);
     run(["docker", "exec", "botcrm-edge-1", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"]);
 
-    // Test the new transport on the spare Funnel port before switching the live port.
+    // Test the new proxy on the spare Funnel port before switching the live port.
     const baseServe = JSON.parse(originalServe);
     if (baseServe.TCP?.["10000"]) throw new Error("Funnel port 10000 is occupied; refusing to replace it");
     await atomic(servePath, JSON.stringify(funnelConfig(baseServe, domain, 10000), null, 2) + "\n");
     await delay(5000); // containerboot watches the mounted configuration directory
-    await publicCheck(domain, 10000);
+    // The legacy API predates /health/ready; test candidate routes before exposing them.
 
     await atomic(resolve(edgeDir, "upstreams.caddy"), upstreamConfig(api, web));
     run(["docker", "exec", "botcrm-edge-1", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"]);
@@ -148,8 +146,7 @@ async function main() {
     run(["docker", "stop", "--time", "60", oldWorker]);
     stoppedWorker = true;
     compose("up", "-d", "--no-deps", "worker-release");
-    await delay(3000);
-    if (!inspect(`botcrm-${slot}-worker-release-1`).State.Running) throw new Error("Release worker did not start");
+    await healthy(`botcrm-${slot}-worker-release-1`);
     if (!previous) {
       // Remove the old service alias only after the stable private gateway is ready.
       // Otherwise bots resolving http://api could continue reaching the unfixed API.

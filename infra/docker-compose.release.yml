@@ -5,6 +5,8 @@ services:
     image: botcrm-api:${BOTCRM_RELEASE:?BOTCRM_RELEASE is required}
     build: !reset null
     depends_on: !reset {}
+    environment:
+      BOTCRM_RELEASE: ${BOTCRM_RELEASE}
   web-release:
     extends: { file: docker-compose.prod.yml, service: web }
     image: botcrm-web:${BOTCRM_RELEASE:?BOTCRM_RELEASE is required}
