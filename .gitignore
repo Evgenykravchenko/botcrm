@@ -50,7 +50,7 @@ next-env.d.ts
 backups/
 *.botcrm-backup
 
-.runtime/
+.runtime
 
 # generated local artifacts
 *.tsbuildinfo
