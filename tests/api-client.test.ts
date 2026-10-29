@@ -53,6 +53,20 @@ test("Retry-After pauses JSON, thumbnails and mutations until the deadline witho
   } finally { unsubscribe(); }
 });
 
+test("reads from before or during a mutation cannot replace its fresh result", async () => {
+  let calls = 0; const releases: Array<() => void> = [];
+  globalThis.fetch = (async () => { calls++; await new Promise<void>((resolve) => releases.push(resolve)); return Response.json([]); }) as typeof fetch;
+  const old = botcrmApi.contacts();
+  const write = botcrmApi.markConversationRead("test-conversation");
+  const during = botcrmApi.contacts();
+  assert.equal(calls, 3);
+  releases[1](); await write;
+  const fresh = botcrmApi.contacts(); assert.equal(calls, 4);
+  releases[0](); await old;
+  const sharedFresh = botcrmApi.contacts(); assert.equal(calls, 4, "an old request finishing must not evict a fresh in-flight read");
+  releases[2](); releases[3](); await Promise.all([during, fresh, sharedFresh]);
+});
+
 test("HTTP-date retry headers, malformed headers and login use the correct cooldown", async (context) => {
   context.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 9, 29) });
   let calls = 0; let header = new Date(Date.now() + 20000).toUTCString();

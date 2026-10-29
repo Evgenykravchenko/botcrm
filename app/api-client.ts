@@ -279,15 +279,23 @@ function request<T>(path: string, init: RequestInit = {}, timeoutMs = 8_000): Pr
   if (typeof window !== "undefined") { const token = window.localStorage.getItem("botcrm_auth_token"); if (token) headers.set("authorization", `Bearer ${token}`); }
   if (init.body) headers.set("content-type", "application/json");
   const scope = requestScope(path);
-  const key = !init.signal && (init.method || "GET").toUpperCase() === "GET" ? JSON.stringify([scope, path, [...headers]]) : "";
+  const method = (init.method || "GET").toUpperCase();
+  const mutation = !["GET", "HEAD", "OPTIONS"].includes(method);
+  const key = !init.signal && method === "GET" ? JSON.stringify([scope, path, [...headers]]) : "";
   const existing = key ? pendingReads.get(key) : undefined;
   if (existing) return existing as Promise<T>;
+  if (mutation) pendingReads.clear();
   const promise = (async () => {
-    checkRateLimit(path);
-    const response = await fetch(`${apiBase()}${path}`, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(timeoutMs) });
-    const payload = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
-    if (!response.ok) throw responseError(response, scope, payload);
-    return payload as T;
+    try {
+      checkRateLimit(path);
+      const response = await fetch(`${apiBase()}${path}`, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(timeoutMs) });
+      const payload = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
+      if (!response.ok) throw responseError(response, scope, payload);
+      return payload as T;
+    } finally {
+      // Reads begun before or during a write cannot satisfy its refresh.
+      if (mutation) pendingReads.clear();
+    }
   })();
   if (key) {
     pendingReads.set(key, promise);
