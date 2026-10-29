@@ -67,13 +67,14 @@ console.log(JSON.stringify({ level: "info", message: "BotCRM bot event worker re
 botEventWorker.on("completed", (job) => console.log(JSON.stringify({ level: "info", message: "bot event delivered", jobId: job.id, outboxId: job.data.outboxId })));
 botEventWorker.on("failed", (job, error) => console.error(JSON.stringify({ level: "error", message: "bot event delivery failed", jobId: job?.id, outboxId: job?.data.outboxId, error: error.message })));
 botEventWorker.on("error", (error) => console.error(JSON.stringify({ level: "error", message: "bot event worker error", error: error.message })));
+const readinessPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, connectionTimeoutMillis: 2000, query_timeout: 2000 });
 const readiness = createServer(async (request, response) => {
   if (request.url !== "/health/ready") { response.writeHead(404).end(); return; }
   try {
     const workers = [worker, messageWorker, botEventWorker];
     const ready = (await Promise.all(workers.map(async (item) => item.isRunning() && (await item.client).status === "ready"))).every(Boolean);
     if (!ready) { response.writeHead(503).end(); return; }
-    await pool.query({ text: "select 1", query_timeout: 2000 });
+    await readinessPool.query("select 1");
     response.writeHead(200).end("ready");
   } catch { response.writeHead(503).end(); }
 });
@@ -141,7 +142,7 @@ async function shutdown(signal: string) {
   clearInterval(messageRecoveryInterval);
   clearInterval(botEventRecoveryInterval);
   await Promise.all([worker.close(), messageWorker.close(), botEventWorker.close(), messageQueue.close(), botEventQueue.close()]);
-  await pool.end();
+  await Promise.all([pool.end(), readinessPool.end()]);
   process.exit(0);
 }
 process.once("SIGINT", () => void shutdown("SIGINT"));
