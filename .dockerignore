@@ -6,6 +6,8 @@ dist
 .vinext
 .wrangler
 .git
+.runtime
+OWNER_CREDENTIALS.txt
 .env
 .env.*
 !.env.example

@@ -99,15 +99,17 @@ async function main() {
   const api = `botcrm-${slot}-api-release-1`;
   const web = `botcrm-${slot}-web-release-1`;
   const releaseEnv = { BOTCRM_RELEASE: release, BOTCRM_RELEASE_API: api };
-  const compose = (...args) => run(["docker", "compose", "--env-file", ".env.production", "-p", `botcrm-${slot}`, "-f", "infra/docker-compose.release.yml", ...args], releaseEnv);
   const oldApi = previous ? `botcrm-${previous.slot}-api-release-1` : "botcrm-api-1";
   const oldWeb = previous ? `botcrm-${previous.slot}-web-release-1` : "botcrm-web-1";
   const oldWorker = previous ? `botcrm-${previous.slot}-worker-release-1` : "botcrm-worker-1";
+  const usesProxy = inspect(oldApi).Config.Env.some((entry) => entry.startsWith("HTTP_PROXY="));
+  const compose = (...args) => run(["docker", "compose", "--env-file", ".env.production", "-p", `botcrm-${slot}`, "-f", "infra/docker-compose.release.yml", ...(usesProxy ? ["-f", "infra/docker-compose.release.xray.yml"] : []), ...args], releaseEnv);
   // First migration may build from a separate checkout while the live config stays mounted.
   const servePath = process.env.BOTCRM_SERVE_CONFIG_FILE || resolve(root, "infra/tailscale-serve/serve.json");
   const originalServe = await readFile(servePath, "utf8");
   let switched = false;
   let stoppedWorker = false;
+  let legacyDetached = false;
   let finished = false;
   try {
     // Build while the active application continues serving requests.
@@ -148,6 +150,13 @@ async function main() {
     compose("up", "-d", "--no-deps", "worker-release");
     await delay(3000);
     if (!inspect(`botcrm-${slot}-worker-release-1`).State.Running) throw new Error("Release worker did not start");
+    if (!previous) {
+      // Remove the old service alias only after the stable private gateway is ready.
+      // Otherwise bots resolving http://api could continue reaching the unfixed API.
+      run(["docker", "network", "disconnect", env.CONTENT_PLATFORM_NETWORK || "bot_platform_backend", oldApi]);
+      legacyDetached = true;
+      run(["docker", "stop", "--time", "60", oldApi]);
+    }
     await atomic(statePath, JSON.stringify({ slot, release, previous: previous ? { slot: previous.slot, release: previous.release } : null, activatedAt: new Date().toISOString() }, null, 2));
     finished = true;
     console.log(`BotCRM ${release} active in ${slot}. Previous web/API retained for draining and rollback.`);
@@ -155,6 +164,10 @@ async function main() {
     try { if (!finished) {
       console.error("Deploy failed; restoring previous routing and worker.");
       await atomic(servePath, originalServe);
+      if (legacyDetached) {
+        run(["docker", "start", oldApi]);
+        run(["docker", "network", "connect", "--alias", "api", env.CONTENT_PLATFORM_NETWORK || "bot_platform_backend", oldApi]);
+      }
       if (switched) {
         await atomic(resolve(edgeDir, "upstreams.caddy"), upstreamConfig(oldApi, oldWeb));
         run(["docker", "exec", "botcrm-edge-1", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"]);
