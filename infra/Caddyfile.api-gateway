@@ -1,0 +1,8 @@
+{
+	admin off
+	auto_https off
+}
+
+:4100 {
+	reverse_proxy botcrm-edge-1:4100
+}

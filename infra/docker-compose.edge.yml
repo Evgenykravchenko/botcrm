@@ -14,6 +14,23 @@ services:
     logging:
       driver: json-file
       options: { max-size: 20m, max-file: "5" }
+  api-gateway:
+    image: caddy:2.10.2-alpine
+    volumes:
+      - ${BOTCRM_EDGE_DIR:-../.runtime/edge}/api-gateway.Caddyfile:/etc/caddy/Caddyfile:ro
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      backend:
+        aliases: [api]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:4100/api/v1/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    logging:
+      driver: json-file
+      options: { max-size: 20m, max-file: "5" }
 networks:
   backend:
     external: true
