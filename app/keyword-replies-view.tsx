@@ -36,6 +36,7 @@ const priorityOptions: AppSelectOption[] = [
 ];
 
 function errorText(error: unknown, fallback: string) {
+  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError" || /fetch is aborted/i.test(error.message))) return "Сервер не успел ответить. Попробуйте ещё раз.";
   return error instanceof ApiError ? error.message : error instanceof Error ? error.message : fallback;
 }
 
@@ -302,7 +303,7 @@ function RulesPanel({ rules, canManage, edit, remove }: { rules: ApiKeywordReply
     <div className="keyword-phrase"><b>“{rule.phrase}”</b><small>{matchModeLabels[rule.matchMode]}</small></div>
     <div className="keyword-response-summary"><b>{rule.response.name}</b><p>{activeText(rule)}</p><span>{rule.response.blocks.map((block) => kindLabels[block.kind]).filter((item, index, list) => list.indexOf(item) === index).join(" · ") || "Резервный текст"}{rule.response.buttons.length ? ` · ${rule.response.buttons.length} кноп.` : ""}</span></div>
     <div><span className={`keyword-status ${rule.enabled && rule.response.status === "published" ? "live" : "draft"}`}><i/>{rule.enabled && rule.response.status === "published" ? "Работает" : rule.response.status === "draft" ? "Черновик" : "Выключен"}</span></div>
-    <div className="keyword-row-actions">{canManage && <><button onClick={() => edit(rule)} aria-label="Редактировать"><Pencil size={15}/></button><button className="danger" onClick={() => remove(rule)} aria-label="Удалить"><Trash2 size={15}/></button></>}<ChevronRight size={16}/></div>
+    <div className="keyword-row-actions">{canManage && <><button onClick={() => edit(rule)} aria-label="Редактировать"><Pencil size={15}/></button><button className="danger" onClick={() => remove(rule)} aria-label="Удалить"><Trash2 size={15}/></button></>}</div>
   </article>)}</section>;
 }
 
