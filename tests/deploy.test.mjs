@@ -29,4 +29,6 @@ test("release upstreams replace forwarded addresses and reject config injection"
   assert.match(text, /header_up -X-Real-IP/);
   assert.throws(() => upstreamConfig("attacker.example {", "botcrm-web-1"));
   assert.throws(() => upstreamConfig("api", "botcrm-web-1"));
+  const release = upstreamConfig("botcrm-green-api-release-1", "botcrm-green-web-release-1", "botcrm-blue-web-release-1");
+  assert.match(release, /handle_response @missing \{\s+reverse_proxy botcrm-blue-web-release-1:3000/);
 });

@@ -15,8 +15,8 @@ function run(args, env = {}, capture = false) {
   return capture ? result.stdout.trim() : "";
 }
 
-export function upstreamConfig(api, web) {
-  for (const host of [api, web]) if (!/^botcrm-(?:api-1|web-1|(?:blue|green)-(?:api|web)-release-1)$/.test(host)) throw new Error("Invalid BotCRM upstream");
+export function upstreamConfig(api, web, previousWeb = web) {
+  for (const host of [api, web, previousWeb]) if (!/^botcrm-(?:api-1|web-1|(?:blue|green)-(?:api|web)-release-1)$/.test(host)) throw new Error("Invalid BotCRM upstream");
   return `(api-backend) {
   reverse_proxy ${api}:4100 {
     header_up X-Forwarded-For {client_ip}
@@ -27,11 +27,22 @@ export function upstreamConfig(api, web) {
   }
 }
 (web-backend) {
+  @previous-assets path /assets/* /_next/static/* /_next/assets/*
+  handle @previous-assets {
+    reverse_proxy ${web}:3000 {
+      @missing status 404
+      handle_response @missing {
+        reverse_proxy ${previousWeb}:3000
+      }
+    }
+  }
+  handle {
   reverse_proxy ${web}:3000 {
     header_up X-Forwarded-For {client_ip}
     header_up -Forwarded
     header_up -X-Real-IP
     header_up X-Forwarded-Proto https
+  }
   }
 }
 `;
@@ -134,7 +145,7 @@ async function main() {
     await delay(5000); // containerboot watches the mounted configuration directory
     // The legacy API predates /health/ready; test candidate routes before exposing them.
 
-    await atomic(resolve(edgeDir, "upstreams.caddy"), upstreamConfig(api, web));
+    await atomic(resolve(edgeDir, "upstreams.caddy"), upstreamConfig(api, web, oldWeb));
     run(["docker", "exec", "botcrm-edge-1", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"]);
     switched = true;
     await publicCheck(domain, 10000);
