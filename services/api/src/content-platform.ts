@@ -1,5 +1,6 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 import { DomainError } from "./core.js";
+import { RealtimeService } from "./realtime.js";
 
 export type KeywordMatchMode = "exact" | "contains" | "any_word" | "all_words";
 export type ContentBlockKind = "text" | "photo" | "video" | "audio" | "document";
@@ -238,7 +239,7 @@ export class ContentPlatformService {
   private readonly managedBindings = new Map<string, ContentPlatformBinding>();
   private readonly ensuredYandexFolders = new Set<string>();
 
-  constructor() {
+  constructor(@Optional() @Inject(RealtimeService) private readonly realtime?: Pick<RealtimeService, "notifyContentMedia">) {
     this.baseUrl = process.env.CONTENT_PLATFORM_URL?.replace(/\/+$/, "");
     this.token = process.env.CONTENT_PLATFORM_TOKEN;
     this.yandexToken = process.env.CONTENT_PLATFORM_YANDEX_TOKEN;
@@ -630,6 +631,7 @@ export class ContentPlatformService {
       : await this.createItem<DirectusRecord>("media_deliveries", payload);
     if (relationId(delivery.media) !== mediaId) throw new DomainError(502, "Content platform returned an invalid media delivery", "content_platform_invalid_response");
     await this.patchItem<DirectusRecord>("media_assets", mediaId, { status: "ready", error_message: null });
+    await this.notifyMedia(workspaceId, botSlug);
     return delivery;
   }
 
@@ -641,7 +643,9 @@ export class ContentPlatformService {
     const body = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.has(key)));
     if (!Object.keys(body).length) throw new DomainError(400, "No supported media fields were supplied", "invalid_media_update");
     if (body.status !== undefined && !mediaStatuses.has(body.status as MediaPreparationStatus)) throw new DomainError(400, "Media status is invalid", "invalid_media_status");
-    return this.patchItem<DirectusRecord>("media_assets", mediaId, body);
+    const item = await this.patchItem<DirectusRecord>("media_assets", mediaId, body);
+    await this.notifyMedia(workspaceId, botSlug);
+    return item;
   }
 
   private async recordsForBot(binding: ContentPlatformBinding) {
@@ -692,13 +696,16 @@ export class ContentPlatformService {
 
   async listMedia(workspaceId: string, botSlug: string) {
     const binding = this.binding(workspaceId, botSlug);
-    const { media } = await this.recordsForBot(binding);
+    const bot = await this.contentBot(binding);
+    const media = await this.items<DirectusRecord>("media_assets", new URLSearchParams({ "filter[bot][_eq]": String(bot.id), limit: "-1", fields: "*" }));
+    const readyIds = await this.readyMediaIds(binding, bot.id, media);
     return media.sort((a, b) => b.id - a.id).map((item) => ({
       id: item.id,
       name: String(item.name ?? ""),
       kind: String(item.kind ?? "document"),
       yandexPath: String(item.yandex_path ?? ""),
       status: String(item.status ?? "draft"),
+      canAttach: readyIds.has(item.id),
       vkAttachment: String(item.vk_attachment ?? ""),
       telegramFileId: String(item.telegram_file_id ?? ""),
       mimeType: String(item.mime_type ?? ""),
@@ -707,11 +714,29 @@ export class ContentPlatformService {
     }));
   }
 
-  private async assertMediaOwned(botId: number, mediaIds: number[]) {
+  private async readyMediaIds(binding: ContentPlatformBinding, botId: number, media: DirectusRecord[]) {
+    const deliveries = binding.channel === "instagram" ? await this.items<DirectusRecord>("media_deliveries", new URLSearchParams({ "filter[media][bot][_eq]": String(botId), "filter[platform][_eq]": "instagram", limit: "-1", fields: "media,status,external_reference,expires_at" })) : [];
+    return new Set(media.filter((item) => {
+      if (item.status !== "ready") return false;
+      if (binding.channel === "vk") return Boolean(String(item.vk_attachment ?? "").trim());
+      if (binding.channel === "telegram") return Boolean(String(item.telegram_file_id ?? "").trim());
+      if (binding.channel === "instagram") return deliveries.some((delivery) => Number(typeof delivery.media === "object" && delivery.media ? (delivery.media as { id?: unknown }).id : delivery.media) === item.id && delivery.status === "ready" && Boolean(delivery.external_reference) && new Date(String(delivery.expires_at)).getTime() > Date.now());
+      return true;
+    }).map((item) => item.id));
+  }
+
+  private async notifyMedia(workspaceId: string, botSlug: string, operation: "insert" | "update" | "delete" = "update") {
+    // Losing a live update must not turn a completed upload into a failed job. The UI also catches up periodically.
+    await this.realtime?.notifyContentMedia(workspaceId, botSlug, operation).catch(() => console.warn("Content media live update could not be published"));
+  }
+
+  private async assertMediaOwned(binding: ContentPlatformBinding, botId: number, mediaIds: number[]) {
     if (!mediaIds.length) return;
-    const records = await this.items<DirectusRecord>("media_assets", new URLSearchParams({ "filter[bot][_eq]": String(botId), limit: "-1", fields: "id" }));
+    const records = await this.items<DirectusRecord>("media_assets", new URLSearchParams({ "filter[bot][_eq]": String(botId), limit: "-1", fields: "id,status,vk_attachment,telegram_file_id" }));
     const allowed = new Set(records.map((item) => item.id));
     if (mediaIds.some((id) => !allowed.has(id))) throw new DomainError(400, "Selected media does not belong to this bot", "invalid_response_media");
+    const readyIds = await this.readyMediaIds(binding, botId, records);
+    if (mediaIds.some((id) => !readyIds.has(id))) throw new DomainError(409, "Дождитесь готовности файлов или открепите их от автоответа.", "content_media_not_ready");
   }
 
   private blockBody(responseId: number, block: ValidatedReplyBlock) {
@@ -726,7 +751,7 @@ export class ContentPlatformService {
     const validated = validateKeywordReplyInput(input);
     const binding = this.binding(workspaceId, botSlug);
     const bot = await this.contentBot(binding);
-    await this.assertMediaOwned(bot.id, [...new Set(validated.response.blocks.map((block) => block.mediaId).filter((id): id is number => Boolean(id)))]);
+    await this.assertMediaOwned(binding, bot.id, [...new Set(validated.response.blocks.map((block) => block.mediaId).filter((id): id is number => Boolean(id)))]);
     const response = await this.createItem<DirectusRecord>("responses", { bot: bot.id, name: validated.response.name, status: validated.response.status, fallback_text: validated.response.fallbackText || null });
     const created: Array<[string, number]> = [];
     try {
@@ -751,7 +776,7 @@ export class ContentPlatformService {
     const responseId = relationId(keyword.response);
     const existingBlocks = records.blocks.filter((item) => relationId(item.response) === responseId);
     const existingButtons = records.buttons.filter((item) => relationId(item.response) === responseId);
-    await this.assertMediaOwned(records.bot.id, [...new Set(validated.response.blocks.map((block) => block.mediaId).filter((id): id is number => Boolean(id)))]);
+    await this.assertMediaOwned(binding, records.bot.id, [...new Set(validated.response.blocks.map((block) => block.mediaId).filter((id): id is number => Boolean(id)))]);
     const submittedBlockIds = new Set(validated.response.blocks.map((item) => item.id).filter((id): id is number => Boolean(id)));
     const submittedButtonIds = new Set(validated.response.buttons.map((item) => item.id).filter((id): id is number => Boolean(id)));
     if ([...submittedBlockIds].some((id) => !existingBlocks.some((item) => item.id === id)) || [...submittedButtonIds].some((id) => !existingButtons.some((item) => item.id === id))) throw new DomainError(400, "Nested content item does not belong to this response", "invalid_nested_content_item");
@@ -814,6 +839,7 @@ export class ContentPlatformService {
     const existing = (await this.listMedia(workspaceId, botSlug)).find((media) => media.yandexPath === validated.yandexPath);
     if (existing) return existing;
     const item = await this.createItem<DirectusRecord>("media_assets", { bot: bot.id, name: validated.name, kind: validated.kind, yandex_path: validated.yandexPath, status: validated.status });
+    await this.notifyMedia(workspaceId, botSlug, "insert");
     return (await this.listMedia(workspaceId, botSlug)).find((media) => media.id === item.id);
   }
 
@@ -821,8 +847,11 @@ export class ContentPlatformService {
     const validated = validateContentMediaInput(input);
     const binding = this.binding(workspaceId, botSlug);
     const records = await this.recordsForBot(binding);
-    if (!records.media.some((item) => item.id === mediaId)) throw new DomainError(404, "Media item was not found", "content_media_not_found");
-    await this.patchItem("media_assets", mediaId, { name: validated.name, kind: validated.kind, yandex_path: validated.yandexPath, status: validated.status });
+    const current = records.media.find((item) => item.id === mediaId);
+    if (!current) throw new DomainError(404, "Media item was not found", "content_media_not_found");
+    const sourceChanged = current.yandex_path !== validated.yandexPath || current.kind !== validated.kind;
+    await this.patchItem("media_assets", mediaId, { name: validated.name, kind: validated.kind, yandex_path: validated.yandexPath, status: sourceChanged ? "queued" : validated.status, ...(sourceChanged ? { vk_attachment: null, telegram_file_id: null, error_message: null } : {}) });
+    await this.notifyMedia(workspaceId, botSlug);
     return (await this.listMedia(workspaceId, botSlug)).find((media) => media.id === mediaId);
   }
 
@@ -834,6 +863,7 @@ export class ContentPlatformService {
     const usageCount = records.blocks.filter((block) => relationId(block.media) === mediaId).length;
     if (usageCount) throw new DomainError(409, "Remove this file from all auto-replies before deleting it", "content_media_in_use");
     await this.deleteItem("media_assets", mediaId);
+    await this.notifyMedia(workspaceId, botSlug, "delete");
     return { ok: true };
   }
 }

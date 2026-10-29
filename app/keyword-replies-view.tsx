@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowLeft, ArrowRight, Bot, Check, ChevronDown, ChevronRight, CircleOff, Copy, FileText, Folder, Image as ImageIcon, Link2, LoaderCircle, MessageSquareReply, Music2, Pencil, Play, Plus, RefreshCw, Save, Search, Settings2, Trash2, UploadCloud, Video, X } from "lucide-react";
 import { ApiContentBot, ApiContentMedia, ApiContentMediaInput, ApiError, ApiKeywordBlockKind, ApiKeywordReply, ApiKeywordReplyButton, ApiKeywordReplyInput, ApiKeywordReplySettings, ApiYandexDiskItem, ApiYandexDiskListing, botcrmApi } from "./api-client";
 import { AppSelect, type AppSelectOption } from "./ui/app-select";
@@ -18,6 +18,8 @@ const matchModeLabels = {
 } as const;
 const kindLabels: Record<ApiKeywordBlockKind, string> = { text: "Текст", photo: "Фото", video: "Видео", audio: "Аудио", document: "Документ" };
 const mediaStatusLabels: Record<ApiContentMedia["status"], string> = { draft: "Черновик", queued: "В очереди", processing: "Обрабатывается", ready: "Готов", error: "Ошибка" };
+function canAttachMedia(item: ApiContentMedia) { return item.status === "ready" && item.canAttach !== false; }
+function mediaPreparationLabel(item: ApiContentMedia) { return item.status === "ready" && !canAttachMedia(item) ? "Нужна повторная подготовка" : mediaStatusLabels[item.status]; }
 const channelLabels: Record<ApiContentBot["channel"], string> = { telegram: "Telegram", vk: "ВКонтакте", instagram: "Instagram", other: "Другой канал" };
 const matchModeOptions: AppSelectOption[] = [
   { value: "exact", label: "Сообщение совпадает целиком", detail: "Только точная фраза" },
@@ -126,11 +128,16 @@ function ContentBotDialog({ busy, close, create }: { busy: boolean; close: () =>
   </div>;
 }
 
-export function KeywordRepliesView({ canManage, canAdmin }: { canManage: boolean; canAdmin: boolean }) {
+export function KeywordRepliesView({ canManage, canAdmin, mediaChange }: { canManage: boolean; canAdmin: boolean; mediaChange?: { botSlug?: string; revision: number } }) {
   const [bots, setBots] = useState<ApiContentBot[]>([]);
   const [botSlug, setBotSlug] = useState("");
   const [rules, setRules] = useState<ApiKeywordReply[]>([]);
   const [media, setMedia] = useState<ApiContentMedia[]>([]);
+  const refreshMediaRef = useRef<() => void>(() => undefined);
+  const pendingMediaRef = useRef(false);
+  const currentBotRef = useRef(botSlug);
+  useEffect(() => { currentBotRef.current = botSlug; }, [botSlug]);
+  useEffect(() => { pendingMediaRef.current = media.some((item) => item.status === "queued" || item.status === "processing"); }, [media]);
   const [settings, setSettings] = useState<ApiKeywordReplySettings>({ unknownMessage: "" });
   const [tab, setTab] = useState<ViewTab>("rules");
   const [loading, setLoading] = useState(true);
@@ -163,6 +170,7 @@ export function KeywordRepliesView({ canManage, canAdmin }: { canManage: boolean
     setError("");
     try {
       const [nextRules, nextMedia, nextSettings] = await Promise.all([botcrmApi.keywordReplies(slug), botcrmApi.contentMedia(slug), botcrmApi.keywordReplySettings(slug)]);
+      if (currentBotRef.current !== slug) return;
       setRules(nextRules); setMedia(nextMedia); setSettings(nextSettings);
     } catch (loadError) { setError(errorText(loadError, "Не удалось загрузить автоответы")); }
     finally { setLoading(false); setRefreshing(false); }
@@ -170,11 +178,41 @@ export function KeywordRepliesView({ canManage, canAdmin }: { canManage: boolean
 
   useEffect(() => { void loadBots(); }, []);
   useEffect(() => { if (botSlug) void loadContent(botSlug); }, [botSlug, loadContent]);
+  useEffect(() => {
+    if (!botSlug) return;
+    let active = true;
+    let running = false;
+    let pending = false;
+    let lastRefresh = Date.now();
+    const refresh = async () => {
+      if (!active || document.visibilityState !== "visible") return;
+      if (running) { pending = true; return; }
+      running = true;
+      do {
+        pending = false;
+        try {
+          const next = await botcrmApi.contentMedia(botSlug);
+          if (active) setMedia((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+        } catch { /* Keep the editor intact; reconnect, focus and periodic catch-up retry. */ }
+        lastRefresh = Date.now();
+      } while (active && pending);
+      running = false;
+    };
+    refreshMediaRef.current = () => { void refresh(); };
+    const catchUp = () => { void refresh(); };
+    const timer = window.setInterval(() => {
+      if (pendingMediaRef.current || Date.now() - lastRefresh >= 30_000) void refresh();
+    }, 5_000);
+    window.addEventListener("focus", catchUp);
+    document.addEventListener("visibilitychange", catchUp);
+    return () => { active = false; refreshMediaRef.current = () => undefined; window.clearInterval(timer); window.removeEventListener("focus", catchUp); document.removeEventListener("visibilitychange", catchUp); };
+  }, [botSlug]);
+  useEffect(() => { if (mediaChange?.botSlug === botSlug) refreshMediaRef.current(); }, [botSlug, mediaChange]);
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(null), 8000); return () => window.clearTimeout(timer); }, [notice]);
 
   const bot = bots.find((item) => item.botSlug === botSlug);
   const published = rules.filter((rule) => rule.enabled && rule.response.status === "published").length;
-  const readyMedia = media.filter((item) => item.status === "ready").length;
+  const readyMedia = media.filter(canAttachMedia).length;
   const fallbackName = settings.fallbackResponseId ? rules.find((rule) => rule.response.id === settings.fallbackResponseId)?.response.name : undefined;
 
   async function saveRule(input: ApiKeywordReplyInput) {
@@ -288,7 +326,7 @@ export function KeywordRepliesView({ canManage, canAdmin }: { canManage: boolean
     {tab === "rules" && <RulesPanel rules={rules} canManage={canManage} edit={setEditor} remove={(item) => setDeleteTarget({ type: "rule", item })}/>} 
     {tab === "media" && <MediaPanel media={media} canManage={canManage} edit={setMediaEditor} remove={(item) => setDeleteTarget({ type: "media", item })}/>} 
     {tab === "fallback" && <FallbackPanel botSlug={botSlug} rules={rules} value={settings} canManage={canManage} saved={(next) => { setSettings(next); setNotice({ tone: "success", text: "Ответ по умолчанию сохранён" }); }}/>} 
-    {editor && <RuleEditor initial={editor === "new" ? undefined : editor} botSlug={botSlug} media={media} mediaCreated={(item) => setMedia((items) => items.some((candidate) => candidate.id === item.id) ? items : [item, ...items])} mediaRemoved={removeMedia} close={() => setEditor(null)} save={saveRule}/>} 
+    {editor && <RuleEditor key={botSlug} initial={editor === "new" ? undefined : editor} botSlug={botSlug} media={media} mediaCreated={(item) => setMedia((items) => items.some((candidate) => candidate.id === item.id) ? items.map((candidate) => candidate.id === item.id ? item : candidate) : [item, ...items])} mediaRemoved={removeMedia} close={() => setEditor(null)} save={saveRule}/>}
     {mediaEditor && <MediaEditor initial={mediaEditor === "new" ? undefined : mediaEditor} botSlug={botSlug} close={() => setMediaEditor(null)} save={saveMedia}/>} 
     {deleteTarget && <DeleteConfirmationDialog target={deleteTarget} busy={deleting} close={() => setDeleteTarget(null)} confirm={() => void confirmRemoval()}/>} 
     {tokenDialogOpen && <ContentTokenDialog issued={issuedToken} busy={creatingToken} create={() => void createBotToken()} close={closeTokenDialog}/>}
@@ -309,7 +347,7 @@ function RulesPanel({ rules, canManage, edit, remove }: { rules: ApiKeywordReply
 
 function MediaPanel({ media, canManage, edit, remove }: { media: ApiContentMedia[]; canManage: boolean; edit: (item: ApiContentMedia) => void; remove: (item: ApiContentMedia) => void }) {
   if (!media.length) return <div className="keyword-empty"><span><UploadCloud size={24}/></span><h3>Медиатека пока пустая</h3><p>Нажмите «Добавить файл» и выберите фото, видео или документ прямо на Яндекс Диске.</p></div>;
-  return <section className="keyword-media-grid">{media.map((item) => <article key={item.id}><div className={`media-kind ${item.kind}`}>{mediaGlyph(item.kind)}</div><div className="media-copy"><div><b>{item.name}</b><span className={`media-state ${item.status}`}>{mediaStatusLabels[item.status]}</span></div><p>{item.status === "ready" ? "Можно прикреплять к автоответам" : item.status === "error" ? "Нужно проверить и подготовить заново" : "Подготавливается автоматически"}</p><small>{kindLabels[item.kind]}{item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}{item.vkAttachment ? " · VK готов" : ""}{item.telegramFileId ? " · Telegram готов" : ""}</small>{item.errorMessage && <em>{item.errorMessage}</em>}</div>{canManage && <div className="media-card-actions"><button className="icon-button" onClick={() => edit(item)} aria-label={`Изменить ${item.name}`}><Pencil size={15}/></button><button className="icon-button danger" onClick={() => remove(item)} aria-label={`Убрать ${item.name} из медиатеки`}><Trash2 size={15}/></button></div>}</article>)}</section>;
+  return <section className="keyword-media-grid">{media.map((item) => <article key={item.id}><div className={`media-kind ${item.kind}`}>{mediaGlyph(item.kind)}</div><div className="media-copy"><div><b>{item.name}</b><span className={`media-state ${item.status}`}>{mediaPreparationLabel(item)}</span></div><p>{canAttachMedia(item) ? "Можно прикреплять к автоответам" : item.status === "error" ? "Нужно проверить и подготовить заново" : "Подготавливается автоматически"}</p><small>{kindLabels[item.kind]}{item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}{item.vkAttachment ? " · VK готов" : ""}{item.telegramFileId ? " · Telegram готов" : ""}</small>{item.errorMessage && <em>{item.errorMessage}</em>}</div>{canManage && <div className="media-card-actions"><button className="icon-button" onClick={() => edit(item)} aria-label={`Изменить ${item.name}`}><Pencil size={15}/></button><button className="icon-button danger" onClick={() => remove(item)} aria-label={`Убрать ${item.name} из медиатеки`}><Trash2 size={15}/></button></div>}</article>)}</section>;
 }
 
 function FallbackPanel({ botSlug, rules, value, canManage, saved }: { botSlug: string; rules: ApiKeywordReply[]; value: ApiKeywordReplySettings; canManage: boolean; saved: (value: ApiKeywordReplySettings) => void }) {
@@ -380,11 +418,15 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
   const [error, setError] = useState("");
   const [mediaToRemove, setMediaToRemove] = useState<ApiContentMedia | null>(null);
   const [removingMedia, setRemovingMedia] = useState(false);
+  const [retryingMedia, setRetryingMedia] = useState<number | null>(null);
+  const [mediaNotice, setMediaNotice] = useState("");
+  const previewSources = JSON.stringify(availableMedia.filter((item) => (item.kind === "photo" || item.kind === "video") && item.yandexPath).map(({ id, yandexPath }) => ({ id, yandexPath })));
   useEffect(() => setAvailableMedia(media), [media]);
   useEffect(() => {
     let active = true;
     const objectUrls: string[] = [];
-    const previewable = availableMedia.filter((item) => (item.kind === "photo" || item.kind === "video") && item.yandexPath);
+    const previewable = JSON.parse(previewSources) as Array<Pick<ApiContentMedia, "id" | "yandexPath">>;
+    setPreviewUrls({});
     void Promise.all(previewable.map(async (item) => {
       try {
         const blob = await botcrmApi.contentDiskPreview(botSlug, item.yandexPath);
@@ -395,7 +437,7 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
       } catch { /* A thumbnail is helpful but not required to send the file. */ }
     }));
     return () => { active = false; objectUrls.forEach((url) => URL.revokeObjectURL(url)); };
-  }, [availableMedia, botSlug]);
+  }, [previewSources, botSlug]);
 
   const blocks = useMemo(() => draft.response.blocks || [], [draft.response.blocks]);
   const buttons = draft.response.buttons || [];
@@ -412,6 +454,7 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
     return { key: String(block.id || `${block.mediaId || block.kind}-${index}`), kind: item?.kind || block.kind as ApiContentMedia["kind"], name: item?.name || kindLabels[block.kind], previewUrl: item ? previewUrls[item.id] : undefined };
   }), [availableMedia, blocks, previewUrls]);
   const mediaLimitReached = selectedMedia.length >= 10;
+  const hasUnreadyMedia = blocks.some((block) => block.kind !== "text" && (!block.mediaId || !availableMedia.some((item) => item.id === block.mediaId && canAttachMedia(item))));
   const active = draft.enabled !== false && draft.response.status === "published";
   const filteredMedia = availableMedia.filter((item) => !mediaSearch.trim() || item.name.toLowerCase().includes(mediaSearch.trim().toLowerCase()));
 
@@ -429,6 +472,7 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
   }
   function toggleMedia(item: ApiContentMedia) {
     const exists = blocks.some((block) => block.kind !== "text" && block.mediaId === item.id);
+    if (!exists && !canAttachMedia(item)) return;
     if (!exists && mediaLimitReached) { setError("В один автоответ можно добавить не более 10 файлов."); return; }
     setError("");
     response({ blocks: exists ? blocks.filter((block) => !(block.kind !== "text" && block.mediaId === item.id)) : [...blocks, { kind: item.kind, mediaId: item.id, body: "", sort: (blocks.length + 1) * 10, sendSeparately: false, enabled: true }] });
@@ -445,8 +489,19 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
     const item = await botcrmApi.createContentMedia(botSlug, { name: file.name, kind: file.kind, yandexPath: file.path, status: "queued" });
     setAvailableMedia((items) => [item, ...items.filter((candidate) => candidate.id !== item.id)]);
     mediaCreated(item);
-    setDraft((current) => ({ ...current, response: { ...current.response, blocks: [...(current.response.blocks || []), { kind: item.kind, mediaId: item.id, body: "", sort: ((current.response.blocks?.length || 0) + 1) * 10, sendSeparately: false, enabled: true }] } }));
+    setMediaSearch("");
+    setMediaNotice("Файл добавлен в медиатеку. Дождитесь статуса «Готов» и нажмите на карточку, чтобы прикрепить его.");
     setDiskOpen(false);
+  }
+  async function retryMedia(item: ApiContentMedia) {
+    setRetryingMedia(item.id); setError("");
+    try {
+      const updated = await botcrmApi.updateContentMedia(botSlug, item.id, { name: item.name, kind: item.kind, yandexPath: item.yandexPath, status: "queued" });
+      setAvailableMedia((items) => items.map((candidate) => candidate.id === updated.id ? updated : candidate));
+      mediaCreated(updated);
+      setMediaNotice("Файл снова поставлен в очередь. Статус обновится автоматически.");
+    } catch (retryError) { setError(errorText(retryError, "Не удалось повторить подготовку")); }
+    finally { setRetryingMedia(null); }
   }
   async function removeLibraryItem() {
     if (!mediaToRemove) return;
@@ -469,6 +524,7 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
     try {
       const phrase = draft.phrase.trim();
       if (!phrase) throw new Error("Напишите ключевую фразу");
+      if (hasUnreadyMedia) throw new Error("Дождитесь готовности файлов или открепите их от автоответа.");
       if (!message.trim() && !selectedMedia.length) throw new Error("Добавьте текст, фото, видео или другой файл");
       await save({ ...draft, phrase, response: { ...draft.response, name: draft.response.name.trim() || `Ответ: ${phrase}`, fallbackText: message } });
     } catch (saveError) { setError(errorText(saveError, "Не удалось сохранить")); setSaving(false); }
@@ -478,18 +534,24 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
     <section className="editor-card trigger-card"><div className="editor-card-title"><span>1</span><div><b>Когда отвечать</b><small>Напишите фразу так, как её введёт человек.</small></div></div><div className="trigger-fields"><label className="form-field"><span>Ключевая фраза</span><input value={draft.phrase} onChange={(event) => setDraft({ ...draft, phrase: event.target.value })} placeholder="Например: получить прайс" autoFocus/></label><div className="form-field"><span>Как распознать</span><AppSelect className="keyword-form-select" ariaLabel="Как распознать ключевую фразу" value={draft.matchMode || "contains"} onValueChange={(value) => setDraft({ ...draft, matchMode: value as ApiKeywordReplyInput["matchMode"] })} options={matchModeOptions} matchTriggerWidth/></div></div></section>
 
     <section className="editor-card answer-card"><div className="editor-card-title"><span>2</span><div><b>Что получит человек</b><small>Можно отправить текст, файлы и кнопки вместе.</small></div></div><label className="form-field message-field"><span>Текст сообщения</span><textarea rows={5} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Напишите ответ так, как его увидит пользователь…"/></label>
-      <div className="media-picker-heading"><div><b>Фото, видео и файлы <em className={mediaLimitReached ? "limit" : ""}>{selectedMedia.length}/10</em></b><small>Нажмите на карточку, чтобы прикрепить её к ответу.</small></div><button type="button" className="button secondary compact" onClick={() => setDiskOpen((value) => !value)}><UploadCloud size={15}/>{diskOpen ? "Скрыть Диск" : "Выбрать с Яндекс Диска"}</button></div>
+      <div className="media-picker-heading"><div><b>Фото, видео и файлы <em className={mediaLimitReached ? "limit" : ""}>{selectedMedia.length}/10</em></b><small>Прикрепляйте файлы со статусом «Готов». Подготовка обновляется автоматически.</small></div><button type="button" className="button secondary compact" onClick={() => setDiskOpen((value) => !value)}><UploadCloud size={15}/>{diskOpen ? "Скрыть Диск" : "Выбрать с Яндекс Диска"}</button></div>
+      {mediaNotice && <p className="media-preparation-note" role="status">{mediaNotice}</p>}
+      {hasUnreadyMedia && <p className="media-preparation-note warning" role="status">Прикреплённый файл ещё не готов. Дождитесь подготовки или открепите его, чтобы сохранить ответ.</p>}
       {diskOpen && <YandexDiskBrowser botSlug={botSlug} onSelect={importDiskFile} disabled={mediaLimitReached}/>} 
       <div className="media-library-search"><Search size={15}/><input value={mediaSearch} onChange={(event) => setMediaSearch(event.target.value)} placeholder="Найти в библиотеке"/></div>
       {filteredMedia.length ? <div className="media-choice-grid">{filteredMedia.map((item) => {
         const selected = blocks.some((block) => block.mediaId === item.id);
-        return <article className={`media-choice-item ${selected ? "selected" : ""}`} key={item.id}>
-          <button type="button" className="media-choice-toggle" aria-pressed={selected} disabled={mediaLimitReached && !selected} onClick={() => toggleMedia(item)}>
+        const ready = canAttachMedia(item);
+        const busy = item.status === "queued" || item.status === "processing";
+        const disabled = !selected && (!ready || mediaLimitReached);
+        return <article className={`media-choice-item ${selected ? "selected" : ""} ${!ready ? "preparing" : ""}`} key={item.id}>
+          <button type="button" className="media-choice-toggle" aria-pressed={selected} aria-describedby={`media-status-${item.id}`} disabled={disabled} onClick={() => toggleMedia(item)}>
             <MediaArtwork kind={item.kind} name={item.name} previewUrl={previewUrls[item.id]}/>
-            <span><b>{item.name}</b><small>{kindLabels[item.kind]}{item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}</small></span>
+            <span><b>{item.name}</b><small>{kindLabels[item.kind]}{item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}</small><span id={`media-status-${item.id}`} className={`media-preparation-status ${ready ? "ready" : item.status === "error" ? "error" : ""}`} role="status">{busy ? <LoaderCircle size={12} className="spin"/> : ready ? <Check size={12}/> : <AlertCircle size={12}/>} {mediaPreparationLabel(item)}</span></span>
           </button>
           <div className="media-choice-actions">
-            <button type="button" className={selected ? "selected" : ""} aria-label={selected ? `Открепить ${item.name}` : `Прикрепить ${item.name}`} disabled={mediaLimitReached && !selected} onClick={() => toggleMedia(item)}>{selected ? <Check size={14}/> : <Plus size={14}/>}</button>
+            <button type="button" className={selected ? "selected" : ""} aria-label={selected ? `Открепить ${item.name}` : `Прикрепить ${item.name}`} disabled={disabled} onClick={() => toggleMedia(item)}>{selected ? <Check size={14}/> : <Plus size={14}/>}</button>
+            {!ready && !busy && <button type="button" aria-label={`Повторить подготовку ${item.name}`} title="Повторить подготовку" disabled={retryingMedia === item.id} onClick={() => void retryMedia(item)}><RefreshCw size={14} className={retryingMedia === item.id ? "spin" : ""}/></button>}
             <button type="button" className="remove" aria-label={`Убрать ${item.name} из медиатеки`} onClick={() => setMediaToRemove(item)}><Trash2 size={14}/></button>
           </div>
         </article>;
@@ -502,7 +564,7 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
 
     <details className="keyword-advanced"><summary><span><Settings2 size={16}/><b>Дополнительные настройки</b></span><ChevronDown size={16}/></summary><div><label className="keyword-active-switch"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)}/><span><b>{active ? "Автоответ работает" : "Автоответ выключен"}</b><small>{active ? "Бот может отвечать на эту фразу." : "Настройки сохранятся, но бот не отвечает."}</small></span></label><div className="form-split"><label className="form-field"><span>Название в списке</span><input value={draft.response.name} onChange={(event) => response({ name: event.target.value })} placeholder="Создастся из ключевой фразы"/></label><div className="form-field"><span>Если подошло несколько правил</span><AppSelect className="keyword-form-select" ariaLabel="Порядок выбора автоответа" value={draft.priority >= 1000 ? "high" : draft.priority <= 10 ? "low" : "normal"} onValueChange={(value) => setDraft({ ...draft, priority: value === "high" ? 1000 : value === "low" ? 10 : 100 })} options={priorityOptions} matchTriggerWidth/></div></div><p>Важность нужна только когда одно сообщение подходит сразу под несколько автоответов. Обычно её можно не менять.</p></div></details>
     {error && <p className="form-error keyword-form-error"><AlertCircle size={16}/>{error}</p>}
-  </section><aside className="keyword-preview"><span className="eyebrow">Так увидит пользователь</span><div className="preview-user-message">{draft.phrase || "Ключевая фраза"}</div><div className="preview-chat"><div className="preview-bot"><Bot size={16}/><b>Бот</b></div><PreviewMediaGallery items={previewMedia}/>{message ? <div className="preview-message">{message}</div> : !selectedMedia.length && <div className="preview-message muted">Здесь появится ответ бота</div>}{!!buttonRows.length && <div className="preview-buttons">{buttonRows.map((row, rowIndex) => <div className="preview-button-row" key={rowIndex} style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>{row.map((button, buttonIndex) => <span key={button.id || `${rowIndex}-${buttonIndex}`}>{button.action === "open_link" && <Link2 size={12}/>}<b>{button.label || "Кнопка"}</b></span>)}</div>)}</div>}</div><div className={`preview-state ${active ? "live" : "draft"}`}><i/>{active ? "Автоответ включён" : "Сохранится как черновик"}</div></aside></div><footer><span className="save-hint">{active ? "Изменения начнут работать сразу" : "Автоответ останется выключенным"}</span><div className="keyword-editor-actions"><button type="button" className="button secondary" onClick={close}>Отмена</button><button className="button primary" disabled={saving}>{saving ? <LoaderCircle className="spin" size={17}/> : <Save size={17}/>} Сохранить</button></div></footer></form></div></div>{mediaToRemove && <DeleteConfirmationDialog target={{ type: "media", item: mediaToRemove }} busy={removingMedia} close={() => setMediaToRemove(null)} confirm={() => void removeLibraryItem()}/>}</>;
+  </section><aside className="keyword-preview"><span className="eyebrow">Так увидит пользователь</span><div className="preview-user-message">{draft.phrase || "Ключевая фраза"}</div><div className="preview-chat"><div className="preview-bot"><Bot size={16}/><b>Бот</b></div><PreviewMediaGallery items={previewMedia}/>{message ? <div className="preview-message">{message}</div> : !selectedMedia.length && <div className="preview-message muted">Здесь появится ответ бота</div>}{!!buttonRows.length && <div className="preview-buttons">{buttonRows.map((row, rowIndex) => <div className="preview-button-row" key={rowIndex} style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>{row.map((button, buttonIndex) => <span key={button.id || `${rowIndex}-${buttonIndex}`}>{button.action === "open_link" && <Link2 size={12}/>}<b>{button.label || "Кнопка"}</b></span>)}</div>)}</div>}</div><div className={`preview-state ${active ? "live" : "draft"}`}><i/>{active ? "Автоответ включён" : "Сохранится как черновик"}</div></aside></div><footer><span className="save-hint">{active ? "Изменения начнут работать сразу" : "Автоответ останется выключенным"}</span><div className="keyword-editor-actions"><button type="button" className="button secondary" onClick={close}>Отмена</button><button className="button primary" disabled={saving || hasUnreadyMedia}>{saving ? <LoaderCircle className="spin" size={17}/> : <Save size={17}/>} Сохранить</button></div></footer></form></div></div>{mediaToRemove && <DeleteConfirmationDialog target={{ type: "media", item: mediaToRemove }} busy={removingMedia} close={() => setMediaToRemove(null)} confirm={() => void removeLibraryItem()}/>}</>;
 }
 
 function MediaArtwork({ kind, name, previewUrl, large = false }: { kind: ApiContentMedia["kind"]; name: string; previewUrl?: string; large?: boolean }) {

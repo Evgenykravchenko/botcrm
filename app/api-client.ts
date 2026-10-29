@@ -205,7 +205,7 @@ export interface ApiKeywordReplyInput {
   enabled?: boolean;
   response: { name: string; status?: "draft" | "published"; fallbackText?: string; blocks?: ApiKeywordReplyBlock[]; buttons?: ApiKeywordReplyButton[]; };
 }
-export interface ApiContentMedia { id: number; name: string; kind: Exclude<ApiKeywordBlockKind, "text">; yandexPath: string; status: "draft" | "queued" | "processing" | "ready" | "error"; vkAttachment: string; telegramFileId: string; mimeType: string; fileSize?: number; errorMessage: string; }
+export interface ApiContentMedia { id: number; name: string; kind: Exclude<ApiKeywordBlockKind, "text">; yandexPath: string; status: "draft" | "queued" | "processing" | "ready" | "error"; canAttach?: boolean; vkAttachment: string; telegramFileId: string; mimeType: string; fileSize?: number; errorMessage: string; }
 export interface ApiContentMediaInput { name: string; kind: ApiContentMedia["kind"]; yandexPath: string; status?: ApiContentMedia["status"]; }
 export interface ApiYandexDiskItem { name: string; path: string; type: "file" | "dir"; kind?: ApiContentMedia["kind"]; mimeType?: string; size?: number; previewUrl?: string; }
 export interface ApiYandexDiskListing { root: string; path: string; items: ApiYandexDiskItem[]; }
