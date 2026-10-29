@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 export type Channel = "telegram" | "vk" | "whatsapp" | "avito" | "api";
 export type ControlMode = "BOT" | "HUMAN" | "PAUSED";
+export interface NativeAttachment { ref: string; kind: "photo" | "video" | "audio" | "document"; name?: string; yandexPath?: string; }
 export interface BotCrmEvent {
   event_id: string;
   schema_version: "1.0";
@@ -29,7 +30,7 @@ export class BotCrmClient {
   }
   event(input: Omit<BotCrmEvent, "schema_version" | "workspace_id" | "bot_id">) { return this.request<{ duplicate: boolean; contactId?: string; conversationId?: string; deliverToBot?: boolean }>("/events", { method: "POST", body: JSON.stringify({ ...input, schema_version: "1.0", workspace_id: this.options.workspaceId, bot_id: this.options.botId }) }); }
   incoming(input: { eventId: string; channel: Channel; chatId: string; userId: string; text: string; externalMessageId?: string; attachments?: Array<{ type: string; url: string }>; profile?: BotCrmEvent["profile"]; attributes?: Record<string, unknown>; raw?: unknown }) { return this.event({ event_id: input.eventId, occurred_at: new Date().toISOString(), channel: input.channel, external_chat_id: input.chatId, external_user_id: input.userId, type: "message.received", message: { external_id: input.externalMessageId, text: input.text, attachments: input.attachments }, profile: input.profile, attributes: input.attributes, raw_payload: input.raw }); }
-  send(input: { conversationId: string; text: string; actor?: "bot" | "operator"; idempotencyKey: string; nativeAttachmentRefs?: string[]; buttons?: Array<{ id?: string; text: string; type: "callback" | "url"; value: string; row: number }> }) { return this.request("/messages/send", { method: "POST", headers: { "idempotency-key": input.idempotencyKey }, body: JSON.stringify({ conversationId: input.conversationId, text: input.text, actor: input.actor ?? "bot", nativeAttachmentRefs: input.nativeAttachmentRefs, buttons: input.buttons }) }); }
+  send(input: { conversationId: string; text: string; actor?: "bot" | "operator"; idempotencyKey: string; nativeAttachmentRefs?: string[]; nativeAttachments?: NativeAttachment[]; buttons?: Array<{ id?: string; text: string; type: "callback" | "url"; value: string; row: number }> }) { return this.request("/messages/send", { method: "POST", headers: { "idempotency-key": input.idempotencyKey }, body: JSON.stringify({ conversationId: input.conversationId, text: input.text, actor: input.actor ?? "bot", nativeAttachmentRefs: input.nativeAttachmentRefs, nativeAttachments: input.nativeAttachments, buttons: input.buttons }) }); }
   conversation(id: string) { return this.request<{ mode: ControlMode; controlVersion: number }>(`/conversations/${id}`); }
   claim(id: string, expectedVersion: number, userId: string) { return this.request(`/conversations/${id}/control`, { method: "PATCH", body: JSON.stringify({ mode: "HUMAN", expectedVersion, userId }) }); }
   returnToBot(id: string, expectedVersion: number) { return this.request(`/conversations/${id}/control`, { method: "PATCH", body: JSON.stringify({ mode: "BOT", expectedVersion }) }); }
