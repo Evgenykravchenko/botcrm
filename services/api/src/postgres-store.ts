@@ -567,7 +567,11 @@ export class PostgresStore {
         const bot = await client.query(`insert into bots(workspace_id,slug,name,integration_mode)
           values($1,$2,$3,'MIRROR')
           on conflict(workspace_id,slug) do update set name=case when bots.name=bots.slug then excluded.name else bots.name end
+          where bots.name=bots.slug and bots.name is distinct from excluded.name
           returning id`, [workspaceId, binding.botSlug, botName]);
+        // A skipped conflict update returns no row. A separate statement also sees
+        // a competing insert after its transaction commits.
+        const botId = bot.rows[0]?.id ?? (await client.query("select id from bots where workspace_id=$1 and slug=$2", [workspaceId, binding.botSlug])).rows[0].id;
         await client.query(`insert into bot_content_profiles(workspace_id,bot_id,content_bot_key,channel,yandex_root)
           values($1,$2,$3,$4,$5)
           on conflict(bot_id) do update set
@@ -575,7 +579,9 @@ export class PostgresStore {
             channel=excluded.channel,
             yandex_root=coalesce(excluded.yandex_root,bot_content_profiles.yandex_root),
             enabled=true,
-            updated_at=now()`, [workspaceId, bot.rows[0].id, binding.contentBotKey, ["telegram", "vk", "instagram"].includes(String(binding.channel)) ? binding.channel : "other", binding.yandexRoot ?? null]);
+            updated_at=now()
+          where (bot_content_profiles.content_bot_key,bot_content_profiles.channel,bot_content_profiles.yandex_root,bot_content_profiles.enabled)
+            is distinct from (excluded.content_bot_key,excluded.channel,coalesce(excluded.yandex_root,bot_content_profiles.yandex_root),true)`, [workspaceId, botId, binding.contentBotKey, ["telegram", "vk", "instagram"].includes(String(binding.channel)) ? binding.channel : "other", binding.yandexRoot ?? null]);
       }
       await client.query("commit");
     } catch (error) {
