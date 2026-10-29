@@ -134,8 +134,9 @@ async function main() {
     if (!/^\d+\.\d+\.\d+\.\d+$/.test(tailIp ?? "")) throw new Error("Funnel backend address is unavailable");
     await atomic(resolve(edgeDir, "proxy-trust.caddy"), `trusted_proxies static ${tailIp}/32\n`);
     await atomic(resolve(edgeDir, "Caddyfile"), (await readFile(resolve(root, "infra/Caddyfile.edge"), "utf8")).replace("STORAGE_DOMAIN", env.BOTCRM_STORAGE_DOMAIN));
+    await atomic(resolve(edgeDir, "api-gateway.Caddyfile"), await readFile(resolve(root, "infra/Caddyfile.api-gateway"), "utf8"));
     await atomic(resolve(edgeDir, "upstreams.caddy"), upstreamConfig(oldApi, oldWeb));
-    run(["docker", "compose", "--env-file", ".env.production", "-f", "infra/docker-compose.edge.yml", "up", "-d", "--no-deps", "edge"], { BOTCRM_EDGE_DIR: await realpath(edgeDir) });
+    run(["docker", "compose", "--env-file", ".env.production", "-f", "infra/docker-compose.edge.yml", "up", "-d", "--no-deps", "edge", "api-gateway"], { BOTCRM_EDGE_DIR: await realpath(edgeDir) });
     run(["docker", "exec", "botcrm-edge-1", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]);
     run(["docker", "exec", "botcrm-edge-1", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"]);
 
@@ -153,6 +154,7 @@ async function main() {
     await atomic(servePath, JSON.stringify(funnelConfig(baseServe, domain, 443), null, 2) + "\n");
     await delay(5000);
     await publicCheck(domain);
+    await healthy("botcrm-api-gateway-1");
 
     // Drain the existing queue consumer before starting its replacement.
     run(["docker", "stop", "--time", "60", oldWorker]);
