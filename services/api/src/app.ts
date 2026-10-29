@@ -217,6 +217,14 @@ export class SystemController {
   @PublicRoute()
   async health() { return { status: "ok", service: "botcrm-api", version: "0.4.2", storage: this.core.storageMode(), database: await this.core.health(), queue: this.queue.status(), time: new Date().toISOString() }; }
 
+  @Get("health/ready")
+  @PublicRoute()
+  async ready() {
+    const database = await this.core.health();
+    if (database.status !== "ok" || !(await this.queue.ready())) throw new DomainError(503, "Application dependencies are not ready", "not_ready");
+    return { status: "ok", release: process.env.BOTCRM_RELEASE || "development" };
+  }
+
   @Get("metrics")
   @Roles("OWNER", "ADMIN", "SUPERVISOR", "SERVICE")
   @Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

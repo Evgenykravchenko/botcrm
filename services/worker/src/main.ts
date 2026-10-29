@@ -1,5 +1,6 @@
 import { config as loadEnv } from "dotenv";
 import { resolve } from "node:path";
+import { createServer } from "node:http";
 import { ConnectionOptions, Queue, Worker } from "bullmq";
 import { Pool } from "pg";
 import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
@@ -66,6 +67,17 @@ console.log(JSON.stringify({ level: "info", message: "BotCRM bot event worker re
 botEventWorker.on("completed", (job) => console.log(JSON.stringify({ level: "info", message: "bot event delivered", jobId: job.id, outboxId: job.data.outboxId })));
 botEventWorker.on("failed", (job, error) => console.error(JSON.stringify({ level: "error", message: "bot event delivery failed", jobId: job?.id, outboxId: job?.data.outboxId, error: error.message })));
 botEventWorker.on("error", (error) => console.error(JSON.stringify({ level: "error", message: "bot event worker error", error: error.message })));
+const readiness = createServer(async (request, response) => {
+  if (request.url !== "/health/ready") { response.writeHead(404).end(); return; }
+  try {
+    const workers = [worker, messageWorker, botEventWorker];
+    const ready = (await Promise.all(workers.map(async (item) => item.isRunning() && (await item.client).status === "ready"))).every(Boolean);
+    if (!ready) { response.writeHead(503).end(); return; }
+    await pool.query({ text: "select 1", query_timeout: 2000 });
+    response.writeHead(200).end("ready");
+  } catch { response.writeHead(503).end(); }
+});
+readiness.listen(4101, "127.0.0.1");
 async function scanInactiveConversations() {
   if (!process.env.SERVICE_TOKEN) return;
   const result = await pool.query(`select id "conversationId",workspace_id "workspaceId",contact_id "contactId",channel,control_mode "controlMode",last_message_at "lastMessageAt",
@@ -122,6 +134,7 @@ retentionInterval.unref();
 void applyRetentionPolicy();
 async function shutdown(signal: string) {
   console.log(JSON.stringify({ level: "info", message: "worker shutdown", signal }));
+  readiness.close();
   clearInterval(inactivityInterval);
   clearInterval(scheduledCampaignInterval);
   clearInterval(retentionInterval);
