@@ -137,6 +137,7 @@ export function BotCRM() {
   const [apiStatus, setApiStatus] = useState<"connecting" | "online" | "offline">("connecting");
   const [realtimeStatus, setRealtimeStatus] = useState<ApiRealtimeStatus>("connecting");
   const [liveRevision, setLiveRevision] = useState(0);
+  const [contentMediaChange, setContentMediaChange] = useState<{ botSlug?: string; revision: number }>({ revision: 0 });
   const [lastRealtimeAt, setLastRealtimeAt] = useState("");
   const [authState, setAuthState] = useState<"checking" | "authenticated" | "login">("checking");
   const [currentUser, setCurrentUser] = useState<ApiUser | null>(null);
@@ -238,7 +239,11 @@ export function BotCRM() {
       debounceTimer = window.setTimeout(() => { debounceTimer = undefined; void synchronize(); }, 250);
     };
     const unsubscribe = subscribeToRealtime(
-      (event) => { setLiveRevision((value) => value + 1); setLastRealtimeAt(new Date(event.occurredAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })); schedule(); },
+      (event) => {
+        setLastRealtimeAt(new Date(event.occurredAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+        if (event.entity === "content_media") { setContentMediaChange((current) => ({ botSlug: event.entityId, revision: current.revision + 1 })); return; }
+        setLiveRevision((value) => value + 1); schedule();
+      },
       (status) => { if (active) { setRealtimeStatus(status); if (status === "live") schedule(); } },
     );
     const catchUp = () => { if (document.visibilityState === "visible") void synchronize(); };
@@ -471,7 +476,7 @@ export function BotCRM() {
       {section === "contacts" && <ContactsView canManageBulk={canSupervise} canManageAttributes={canAdmin} attributeDefinitions={attributeDefinitions} onManageAttributes={() => setAttributeManager(true)} contacts={contacts} conversations={conversations} onOpen={(contact) => { const conversationId = contact.conversationId || conversations.find((item) => item.contactId === contact.id)?.id; if (conversationId) { setSelectedId(conversationId); setSection("inbox"); } else setContactEditor(contact); }} onEdit={setContactEditor} onCreate={() => setContactEditor("new")} onSegments={() => setSegmentManager(true)} onChanged={() => loadWorkspace(true)} notify={notify} />}
       {section === "pipeline" && <PipelineView canConfigure={canSupervise} stages={stages} pipelines={pipelines} selectedPipelineId={selectedPipelineId} onSelectPipeline={switchPipeline} dragged={dragged} setDragged={setDragged} moveDeal={moveDeal} onCreate={(stageId) => setDealComposer({ stageId })} onEdit={(deal) => setDealComposer({ deal })} onConfigure={() => setPipelineSettings(true)} />}
       {section === "campaigns" && <CampaignsView canManage={canSupervise} items={campaignItems} onCreate={() => { setCampaignEditor(null); setCampaignComposer(true); }} onEdit={(campaign) => { setCampaignEditor(campaign); setCampaignComposer(true); }} onStart={startCampaign} onPause={pauseCampaign} onCancel={cancelCampaign} actionId={startingCampaignId} />}
-      {section === "keywordReplies" && <KeywordRepliesView canManage={canSupervise} canAdmin={canAdmin} />}
+      {section === "keywordReplies" && <KeywordRepliesView canManage={canSupervise} canAdmin={canAdmin} mediaChange={contentMediaChange} />}
       {section === "automations" && <AutomationsView canManage={canSupervise} attributeDefinitions={attributeDefinitions} automations={automations} runs={automationRuns} contacts={conversations} refresh={() => loadWorkspace(true)} notify={notify} />}
       {section === "integrations" && <IntegrationsView canCheck={canSupervise} canManage={canAdmin} connectors={connectors} refresh={() => loadWorkspace(true)} notify={notify} onCreate={() => setConnectorComposer(true)} />}
       {section === "analytics" && <AnalyticsView revision={liveRevision} />}
