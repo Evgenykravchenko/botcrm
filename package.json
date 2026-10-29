@@ -46,6 +46,8 @@
         "prod:init": "node infra/scripts/init-production.mjs",
         "prod:check": "node infra/scripts/production-check.mjs",
         "prod:check:live": "node infra/scripts/production-check.mjs --live",
+        "prod:deploy": "node infra/scripts/deploy.mjs",
+        "test:deploy": "node --test tests/deploy.test.mjs",
         "prod:config": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml config",
         "prod:tailscale:config": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml -f infra/docker-compose.tailscale.yml config",
         "prod:build": "docker compose --env-file .env.production -f infra/docker-compose.prod.yml build",

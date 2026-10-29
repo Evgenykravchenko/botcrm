@@ -1,0 +1,45 @@
+{
+	# Container-local API enables atomic config reloads; no admin port is published.
+	admin localhost:2019
+	auto_https off
+	servers :8081 {
+		listener_wrappers {
+			proxy_protocol {
+				timeout 2s
+				import proxy-trust.caddy
+				fallback_policy reject
+			}
+		}
+	}
+}
+
+import upstreams.caddy
+
+:8080, :8081 {
+	encode zstd gzip
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), geolocation=(), payment=(), usb=()"
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https://STORAGE_DOMAIN"
+	}
+	@api path /api/* /api-docs*
+	handle @api {
+		import api-backend
+	}
+	handle {
+		import web-backend
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
+# Stable private BotCRM API address for the already connected content bots.
+:4100 {
+	import api-backend
+}
