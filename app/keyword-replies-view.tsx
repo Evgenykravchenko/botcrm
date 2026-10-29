@@ -4,6 +4,8 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { AlertCircle, ArrowLeft, ArrowRight, Bot, Check, ChevronDown, ChevronRight, CircleOff, Copy, FileText, Folder, Image as ImageIcon, Link2, LoaderCircle, MessageSquareReply, Music2, Pencil, Play, Plus, RefreshCw, Save, Search, Settings2, Trash2, UploadCloud, Video, X } from "lucide-react";
 import { ApiContentBot, ApiContentMedia, ApiContentMediaInput, ApiError, ApiKeywordBlockKind, ApiKeywordReply, ApiKeywordReplyButton, ApiKeywordReplyInput, ApiKeywordReplySettings, ApiYandexDiskItem, ApiYandexDiskListing, botcrmApi } from "./api-client";
 import { AppSelect, type AppSelectOption } from "./ui/app-select";
+import { useDiskPreview, VideoPreviewDialog } from "./media-preview";
+import { MediaPreparationStatus } from "./media-preparation-status";
 
 type ViewTab = "rules" | "media" | "fallback";
 type Notice = { tone: "success" | "error"; text: string } | null;
@@ -17,9 +19,7 @@ const matchModeLabels = {
   all_words: "Все слова",
 } as const;
 const kindLabels: Record<ApiKeywordBlockKind, string> = { text: "Текст", photo: "Фото", video: "Видео", audio: "Аудио", document: "Документ" };
-const mediaStatusLabels: Record<ApiContentMedia["status"], string> = { draft: "Черновик", queued: "В очереди", processing: "Обрабатывается", ready: "Готов", error: "Ошибка" };
 function canAttachMedia(item: ApiContentMedia) { return item.status === "ready" && item.canAttach !== false; }
-function mediaPreparationLabel(item: ApiContentMedia) { return item.status === "ready" && !canAttachMedia(item) ? "Нужна повторная подготовка" : mediaStatusLabels[item.status]; }
 const channelLabels: Record<ApiContentBot["channel"], string> = { telegram: "Telegram", vk: "ВКонтакте", instagram: "Instagram", other: "Другой канал" };
 const matchModeOptions: AppSelectOption[] = [
   { value: "exact", label: "Сообщение совпадает целиком", detail: "Только точная фраза" },
@@ -324,7 +324,7 @@ export function KeywordRepliesView({ canManage, canAdmin, mediaChange }: { canMa
 
     {error && <div className="keyword-inline-error"><AlertCircle size={16}/><span>{error}</span><button onClick={() => void loadContent(botSlug)}>Повторить</button></div>}
     {tab === "rules" && <RulesPanel rules={rules} canManage={canManage} edit={setEditor} remove={(item) => setDeleteTarget({ type: "rule", item })}/>} 
-    {tab === "media" && <MediaPanel media={media} canManage={canManage} edit={setMediaEditor} remove={(item) => setDeleteTarget({ type: "media", item })}/>} 
+    {tab === "media" && <MediaPanel media={media} botSlug={botSlug} canManage={canManage} edit={setMediaEditor} remove={(item) => setDeleteTarget({ type: "media", item })}/>}
     {tab === "fallback" && <FallbackPanel botSlug={botSlug} rules={rules} value={settings} canManage={canManage} saved={(next) => { setSettings(next); setNotice({ tone: "success", text: "Ответ по умолчанию сохранён" }); }}/>} 
     {editor && <RuleEditor key={botSlug} initial={editor === "new" ? undefined : editor} botSlug={botSlug} media={media} mediaCreated={(item) => setMedia((items) => items.some((candidate) => candidate.id === item.id) ? items.map((candidate) => candidate.id === item.id ? item : candidate) : [item, ...items])} mediaRemoved={removeMedia} close={() => setEditor(null)} save={saveRule}/>}
     {mediaEditor && <MediaEditor initial={mediaEditor === "new" ? undefined : mediaEditor} botSlug={botSlug} close={() => setMediaEditor(null)} save={saveMedia}/>} 
@@ -345,9 +345,16 @@ function RulesPanel({ rules, canManage, edit, remove }: { rules: ApiKeywordReply
   </article>)}</section>;
 }
 
-function MediaPanel({ media, canManage, edit, remove }: { media: ApiContentMedia[]; canManage: boolean; edit: (item: ApiContentMedia) => void; remove: (item: ApiContentMedia) => void }) {
+function LibraryMediaArtwork({ item, botSlug, play }: { item: ApiContentMedia; botSlug: string; play: (poster: string) => void }) {
+  const preview = useDiskPreview(botSlug, item.yandexPath, item.kind === "photo" || item.kind === "video");
+  const artwork = <MediaArtwork kind={item.kind} name={item.name} previewUrl={preview.url}/>;
+  return item.kind === "video" ? <button type="button" className="library-media-thumbnail" aria-label={`Посмотреть ${item.name}`} onClick={() => play(preview.url)}>{artwork}</button> : <span className="library-media-thumbnail">{artwork}</span>;
+}
+
+function MediaPanel({ media, botSlug, canManage, edit, remove }: { media: ApiContentMedia[]; botSlug: string; canManage: boolean; edit: (item: ApiContentMedia) => void; remove: (item: ApiContentMedia) => void }) {
+  const [viewing, setViewing] = useState<{ item: ApiContentMedia; poster: string } | null>(null);
   if (!media.length) return <div className="keyword-empty"><span><UploadCloud size={24}/></span><h3>Медиатека пока пустая</h3><p>Нажмите «Добавить файл» и выберите фото, видео или документ прямо на Яндекс Диске.</p></div>;
-  return <section className="keyword-media-grid">{media.map((item) => <article key={item.id}><div className={`media-kind ${item.kind}`}>{mediaGlyph(item.kind)}</div><div className="media-copy"><div><b>{item.name}</b><span className={`media-state ${item.status}`}>{mediaPreparationLabel(item)}</span></div><p>{canAttachMedia(item) ? "Можно прикреплять к автоответам" : item.status === "error" ? "Нужно проверить и подготовить заново" : "Подготавливается автоматически"}</p><small>{kindLabels[item.kind]}{item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}{item.vkAttachment ? " · VK готов" : ""}{item.telegramFileId ? " · Telegram готов" : ""}</small>{item.errorMessage && <em>{item.errorMessage}</em>}</div>{canManage && <div className="media-card-actions"><button className="icon-button" onClick={() => edit(item)} aria-label={`Изменить ${item.name}`}><Pencil size={15}/></button><button className="icon-button danger" onClick={() => remove(item)} aria-label={`Убрать ${item.name} из медиатеки`}><Trash2 size={15}/></button></div>}</article>)}</section>;
+  return <><section className="keyword-media-grid">{media.map((item) => <article key={item.id}><LibraryMediaArtwork item={item} botSlug={botSlug} play={(poster) => setViewing({ item, poster })}/><div className="media-copy"><div><b>{item.name}</b><MediaPreparationStatus item={item}/></div><p>{canAttachMedia(item) ? "Можно прикреплять к автоответам" : item.status === "error" ? "Нужно проверить и подготовить заново" : "Подготавливается автоматически"}</p><small>{kindLabels[item.kind]}{item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}{item.vkAttachment ? " · VK готов" : ""}{item.telegramFileId ? " · Telegram готов" : ""}</small>{item.errorMessage && <em>{item.errorMessage}</em>}</div>{canManage && <div className="media-card-actions"><button className="icon-button" onClick={() => edit(item)} aria-label={`Изменить ${item.name}`}><Pencil size={15}/></button><button className="icon-button danger" onClick={() => remove(item)} aria-label={`Убрать ${item.name} из медиатеки`}><Trash2 size={15}/></button></div>}</article>)}</section>{viewing && <VideoPreviewDialog botSlug={botSlug} path={viewing.item.yandexPath} name={viewing.item.name} poster={viewing.poster} close={() => setViewing(null)}/>}</>;
 }
 
 function FallbackPanel({ botSlug, rules, value, canManage, saved }: { botSlug: string; rules: ApiKeywordReply[]; value: ApiKeywordReplySettings; canManage: boolean; saved: (value: ApiKeywordReplySettings) => void }) {
@@ -373,9 +380,10 @@ function formatFileSize(value?: number) {
   return `${(value / 1024 / 1024).toFixed(value > 100 * 1024 * 1024 ? 0 : 1)} МБ`;
 }
 
-type PreviewGalleryItem = { key: string; kind: ApiContentMedia["kind"]; name: string; previewUrl?: string };
+type PreviewGalleryItem = { key: string; kind: ApiContentMedia["kind"]; name: string; previewUrl?: string; yandexPath?: string };
 
-function PreviewMediaGallery({ items }: { items: PreviewGalleryItem[] }) {
+function PreviewMediaGallery({ items, botSlug }: { items: PreviewGalleryItem[]; botSlug: string }) {
+  const [viewing, setViewing] = useState<PreviewGalleryItem | null>(null);
   const visibleItems = useMemo(() => items.slice(0, 10), [items]);
   const [ratios, setRatios] = useState<Record<string, number>>({});
   useEffect(() => {
@@ -400,12 +408,12 @@ function PreviewMediaGallery({ items }: { items: PreviewGalleryItem[] }) {
       : visibleItems.length === 3
         ? firstRatio > 1.25 ? "triple-top" : "triple-left"
         : visibleItems.length === 4 ? firstRatio < .9 ? "quad-feature" : "quad" : visibleItems.length === 5 ? "five" : "many";
-  return <div className={`preview-media-gallery ${layout} count-${visibleItems.length}`} aria-label={`Медиафайлов: ${visibleItems.length}`}>{visibleItems.map((item, index) => {
+  return <><div className={`preview-media-gallery ${layout} count-${visibleItems.length}`} aria-label={`Медиафайлов: ${visibleItems.length}`}>{visibleItems.map((item, index) => {
     const ratio = ratios[item.key] || 1;
     const orientation = ratio < .82 ? "portrait" : ratio > 1.35 ? "wide" : "square";
     const style = { ...(item.previewUrl ? { backgroundImage: `url(${JSON.stringify(item.previewUrl).slice(1, -1)})` } : {}), ...(visibleItems.length === 1 ? { aspectRatio: String(ratio) } : {}) };
-    return <span className={`preview-gallery-item ${item.kind} ${orientation}`} key={item.key} style={style} role={item.previewUrl ? "img" : undefined} aria-label={item.name}>{!item.previewUrl && mediaGlyph(item.kind, 25)}{item.kind === "video" && <i><Play size={18}/></i>}{index === 9 && items.length > 10 && <b className="preview-gallery-overflow">+{items.length - 10}</b>}</span>;
-  })}</div>;
+    return <span className={`preview-gallery-item ${item.kind} ${orientation}`} key={item.key} style={style} role={item.previewUrl && item.kind !== "video" ? "img" : undefined} aria-label={item.name}>{!item.previewUrl && mediaGlyph(item.kind, 25)}{item.kind === "video" && <button type="button" className="preview-play" aria-label={`Посмотреть ${item.name}`} onClick={() => setViewing(item)}><Play size={18}/></button>}{index === 9 && items.length > 10 && <b className="preview-gallery-overflow">+{items.length - 10}</b>}</span>;
+  })}</div>{viewing?.yandexPath && <VideoPreviewDialog botSlug={botSlug} path={viewing.yandexPath} name={viewing.name} poster={viewing.previewUrl} close={() => setViewing(null)}/>}</>;
 }
 
 function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close, save }: { initial?: ApiKeywordReply; botSlug: string; media: ApiContentMedia[]; mediaCreated: (item: ApiContentMedia) => void; mediaRemoved: (item: ApiContentMedia) => Promise<boolean>; close: () => void; save: (input: ApiKeywordReplyInput) => Promise<void> }) {
@@ -451,7 +459,7 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
   const selectedMedia = blocks.filter((block) => block.kind !== "text" && block.enabled !== false).map((block) => ({ block, item: availableMedia.find((item) => item.id === block.mediaId) }));
   const previewMedia: PreviewGalleryItem[] = useMemo(() => blocks.filter((block) => block.kind !== "text" && block.enabled !== false).map((block, index) => {
     const item = availableMedia.find((candidate) => candidate.id === block.mediaId);
-    return { key: String(block.id || `${block.mediaId || block.kind}-${index}`), kind: item?.kind || block.kind as ApiContentMedia["kind"], name: item?.name || kindLabels[block.kind], previewUrl: item ? previewUrls[item.id] : undefined };
+    return { key: String(block.id || `${block.mediaId || block.kind}-${index}`), kind: item?.kind || block.kind as ApiContentMedia["kind"], name: item?.name || kindLabels[block.kind], yandexPath: item?.yandexPath, previewUrl: item ? previewUrls[item.id] : undefined };
   }), [availableMedia, blocks, previewUrls]);
   const mediaLimitReached = selectedMedia.length >= 10;
   const hasUnreadyMedia = blocks.some((block) => block.kind !== "text" && (!block.mediaId || !availableMedia.some((item) => item.id === block.mediaId && canAttachMedia(item))));
@@ -547,7 +555,7 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
         return <article className={`media-choice-item ${selected ? "selected" : ""} ${!ready ? "preparing" : ""}`} key={item.id}>
           <button type="button" className="media-choice-toggle" aria-pressed={selected} aria-describedby={`media-status-${item.id}`} disabled={disabled} onClick={() => toggleMedia(item)}>
             <MediaArtwork kind={item.kind} name={item.name} previewUrl={previewUrls[item.id]}/>
-            <span><b>{item.name}</b><small>{kindLabels[item.kind]}{item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}</small><span id={`media-status-${item.id}`} className={`media-preparation-status ${ready ? "ready" : item.status === "error" ? "error" : ""}`} role="status">{busy ? <LoaderCircle size={12} className="spin"/> : ready ? <Check size={12}/> : <AlertCircle size={12}/>} {mediaPreparationLabel(item)}</span></span>
+            <span><b>{item.name}</b><small>{kindLabels[item.kind]}{item.fileSize ? ` · ${formatFileSize(item.fileSize)}` : ""}</small><span id={`media-status-${item.id}`}><MediaPreparationStatus item={item}/></span></span>
           </button>
           <div className="media-choice-actions">
             <button type="button" className={selected ? "selected" : ""} aria-label={selected ? `Открепить ${item.name}` : `Прикрепить ${item.name}`} disabled={disabled} onClick={() => toggleMedia(item)}>{selected ? <Check size={14}/> : <Plus size={14}/>}</button>
@@ -564,7 +572,7 @@ function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close
 
     <details className="keyword-advanced"><summary><span><Settings2 size={16}/><b>Дополнительные настройки</b></span><ChevronDown size={16}/></summary><div><label className="keyword-active-switch"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)}/><span><b>{active ? "Автоответ работает" : "Автоответ выключен"}</b><small>{active ? "Бот может отвечать на эту фразу." : "Настройки сохранятся, но бот не отвечает."}</small></span></label><div className="form-split"><label className="form-field"><span>Название в списке</span><input value={draft.response.name} onChange={(event) => response({ name: event.target.value })} placeholder="Создастся из ключевой фразы"/></label><div className="form-field"><span>Если подошло несколько правил</span><AppSelect className="keyword-form-select" ariaLabel="Порядок выбора автоответа" value={draft.priority >= 1000 ? "high" : draft.priority <= 10 ? "low" : "normal"} onValueChange={(value) => setDraft({ ...draft, priority: value === "high" ? 1000 : value === "low" ? 10 : 100 })} options={priorityOptions} matchTriggerWidth/></div></div><p>Важность нужна только когда одно сообщение подходит сразу под несколько автоответов. Обычно её можно не менять.</p></div></details>
     {error && <p className="form-error keyword-form-error"><AlertCircle size={16}/>{error}</p>}
-  </section><aside className="keyword-preview"><span className="eyebrow">Так увидит пользователь</span><div className="preview-user-message">{draft.phrase || "Ключевая фраза"}</div><div className="preview-chat"><div className="preview-bot"><Bot size={16}/><b>Бот</b></div><PreviewMediaGallery items={previewMedia}/>{message ? <div className="preview-message">{message}</div> : !selectedMedia.length && <div className="preview-message muted">Здесь появится ответ бота</div>}{!!buttonRows.length && <div className="preview-buttons">{buttonRows.map((row, rowIndex) => <div className="preview-button-row" key={rowIndex} style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>{row.map((button, buttonIndex) => <span key={button.id || `${rowIndex}-${buttonIndex}`}>{button.action === "open_link" && <Link2 size={12}/>}<b>{button.label || "Кнопка"}</b></span>)}</div>)}</div>}</div><div className={`preview-state ${active ? "live" : "draft"}`}><i/>{active ? "Автоответ включён" : "Сохранится как черновик"}</div></aside></div><footer><span className="save-hint">{active ? "Изменения начнут работать сразу" : "Автоответ останется выключенным"}</span><div className="keyword-editor-actions"><button type="button" className="button secondary" onClick={close}>Отмена</button><button className="button primary" disabled={saving || hasUnreadyMedia}>{saving ? <LoaderCircle className="spin" size={17}/> : <Save size={17}/>} Сохранить</button></div></footer></form></div></div>{mediaToRemove && <DeleteConfirmationDialog target={{ type: "media", item: mediaToRemove }} busy={removingMedia} close={() => setMediaToRemove(null)} confirm={() => void removeLibraryItem()}/>}</>;
+  </section><aside className="keyword-preview"><span className="eyebrow">Так увидит пользователь</span><div className="preview-user-message">{draft.phrase || "Ключевая фраза"}</div><div className="preview-chat"><div className="preview-bot"><Bot size={16}/><b>Бот</b></div><PreviewMediaGallery items={previewMedia} botSlug={botSlug}/>{message ? <div className="preview-message">{message}</div> : !selectedMedia.length && <div className="preview-message muted">Здесь появится ответ бота</div>}{!!buttonRows.length && <div className="preview-buttons">{buttonRows.map((row, rowIndex) => <div className="preview-button-row" key={rowIndex} style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>{row.map((button, buttonIndex) => <span key={button.id || `${rowIndex}-${buttonIndex}`}>{button.action === "open_link" && <Link2 size={12}/>}<b>{button.label || "Кнопка"}</b></span>)}</div>)}</div>}</div><div className={`preview-state ${active ? "live" : "draft"}`}><i/>{active ? "Автоответ включён" : "Сохранится как черновик"}</div></aside></div><footer><span className="save-hint">{active ? "Изменения начнут работать сразу" : "Автоответ останется выключенным"}</span><div className="keyword-editor-actions"><button type="button" className="button secondary" onClick={close}>Отмена</button><button className="button primary" disabled={saving || hasUnreadyMedia}>{saving ? <LoaderCircle className="spin" size={17}/> : <Save size={17}/>} Сохранить</button></div></footer></form></div></div>{mediaToRemove && <DeleteConfirmationDialog target={{ type: "media", item: mediaToRemove }} busy={removingMedia} close={() => setMediaToRemove(null)} confirm={() => void removeLibraryItem()}/>}</>;
 }
 
 function MediaArtwork({ kind, name, previewUrl, large = false }: { kind: ApiContentMedia["kind"]; name: string; previewUrl?: string; large?: boolean }) {

@@ -13,6 +13,7 @@ import { SegmentGroup } from "./segment.js";
 import { CampaignButton } from "./campaign-content.js";
 import { exportContacts, parseContactImport } from "./contact-transfer.js";
 import { RealtimeService } from "./realtime.js";
+import { ContentMediaProgressService } from "./content-media-progress.js";
 import { AttributeDefinitionInput } from "./attribute-definition.js";
 import { parseWebhookChallenge } from "./input-normalization.js";
 import { ContentMediaInput, ContentPlatformService, KeywordReplyInput } from "./content-platform.js";
@@ -846,6 +847,14 @@ export class KeywordRepliesController {
     return reply.header("content-type", preview.contentType).header("cache-control", "private, max-age=300").header("x-content-type-options", "nosniff").send(preview.body);
   }
 
+  @Get("media/playback")
+  @Roles("OWNER", "ADMIN", "SUPERVISOR", "OPERATOR")
+  @Header("Cache-Control", "no-store")
+  async diskPlayback(@Query("botSlug") botSlug: string, @Query("path") path: string, @Req() request: { auth?: AuthPrincipal }) {
+    const workspace = this.workspace(request); await this.prepare(workspace, botSlug);
+    return this.content.yandexVideoPlayback(workspace, botSlug, path);
+  }
+
   @Post("media")
   @Roles("OWNER", "ADMIN", "SUPERVISOR")
   async createMedia(@Query("botSlug") botSlug: string, @Body() body: ContentMediaInput, @Req() request: { auth?: AuthPrincipal }) {
@@ -926,5 +935,5 @@ export class BotContentRuntimeController {
   }
 }
 
-@Module({ controllers: [SystemController, RealtimeController, AuthController, AdminController, ApiController, KeywordRepliesController, BotContentRuntimeController], providers: [BotCrmService, CampaignQueueService, RealtimeService, AuthService, ContentPlatformService, RateLimitGuard, AuthGuard, { provide: APP_GUARD, useExisting: RateLimitGuard }, { provide: APP_GUARD, useExisting: AuthGuard }] })
+@Module({ controllers: [SystemController, RealtimeController, AuthController, AdminController, ApiController, KeywordRepliesController, BotContentRuntimeController], providers: [BotCrmService, CampaignQueueService, RealtimeService, ContentMediaProgressService, AuthService, ContentPlatformService, RateLimitGuard, AuthGuard, { provide: APP_GUARD, useExisting: RateLimitGuard }, { provide: APP_GUARD, useExisting: AuthGuard }] })
 export class AppModule {}

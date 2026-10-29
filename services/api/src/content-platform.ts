@@ -1,6 +1,7 @@
 import { Inject, Injectable, Optional } from "@nestjs/common";
 import { DomainError } from "./core.js";
 import { RealtimeService } from "./realtime.js";
+import { ContentMediaProgressService, validateMediaProgress } from "./content-media-progress.js";
 
 export type KeywordMatchMode = "exact" | "contains" | "any_word" | "all_words";
 export type ContentBlockKind = "text" | "photo" | "video" | "audio" | "document";
@@ -239,7 +240,7 @@ export class ContentPlatformService {
   private readonly managedBindings = new Map<string, ContentPlatformBinding>();
   private readonly ensuredYandexFolders = new Set<string>();
 
-  constructor(@Optional() @Inject(RealtimeService) private readonly realtime?: Pick<RealtimeService, "notifyContentMedia">) {
+  constructor(@Optional() @Inject(RealtimeService) private readonly realtime?: Pick<RealtimeService, "notifyContentMedia">, @Optional() @Inject(ContentMediaProgressService) private readonly progress?: ContentMediaProgressService) {
     this.baseUrl = process.env.CONTENT_PLATFORM_URL?.replace(/\/+$/, "");
     this.token = process.env.CONTENT_PLATFORM_TOKEN;
     this.yandexToken = process.env.CONTENT_PLATFORM_YANDEX_TOKEN;
@@ -352,7 +353,7 @@ export class ContentPlatformService {
     await this.requireApplicationFolder(root);
     const path = normalizeDiskPath(requestedPath);
     if (root !== "/" && path !== root && !path.startsWith(`${root}/`)) throw new DomainError(403, "This Yandex Disk file is outside the bot library", "yandex_disk_path_forbidden");
-    const query = new URLSearchParams({ path, preview_size: "M", preview_crop: "true", fields: "type,preview" });
+    const query = new URLSearchParams({ path, preview_size: "XL", preview_crop: "false", fields: "type,preview" });
     let metadataResponse: Response;
     try {
       metadataResponse = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?${query.toString()}`, { headers: { accept: "application/json", authorization: `OAuth ${this.yandexToken}` }, signal: AbortSignal.timeout(8_000) });
@@ -374,6 +375,27 @@ export class ContentPlatformService {
     const body = Buffer.from(await previewResponse.arrayBuffer());
     if (body.byteLength > 5 * 1024 * 1024) throw new DomainError(502, "Yandex Disk preview is too large", "yandex_disk_invalid_preview");
     return { body, contentType };
+  }
+
+  async yandexVideoPlayback(workspaceId: string, botSlug: string, requestedPath: string) {
+    const binding = this.binding(workspaceId, botSlug);
+    if (!this.yandexToken || !binding.yandexRoot) throw new DomainError(503, "Yandex Disk playback is not configured", "yandex_disk_browser_not_configured");
+    const root = normalizeDiskPath(binding.yandexRoot);
+    await this.requireApplicationFolder(root);
+    const path = normalizeDiskPath(requestedPath);
+    if (root !== "/" && path !== root && !path.startsWith(`${root}/`)) throw new DomainError(403, "This Yandex Disk file is outside the bot library", "yandex_disk_path_forbidden");
+    const headers = { authorization: `OAuth ${this.yandexToken}` };
+    const metadataResponse = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?${new URLSearchParams({ path, fields: "type,mime_type" })}`, { headers, signal: AbortSignal.timeout(8_000) });
+    if (!metadataResponse.ok) throw new DomainError(502, "Video is temporarily unavailable", "yandex_disk_request_failed");
+    const metadata = await metadataResponse.json() as { type?: string; mime_type?: string };
+    if (metadata.type !== "file" || !metadata.mime_type?.startsWith("video/")) throw new DomainError(400, "The selected file is not a video", "invalid_video_source");
+    const response = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?${new URLSearchParams({ path })}`, { headers, signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) throw new DomainError(502, "Video playback is temporarily unavailable", "yandex_disk_request_failed");
+    const link = await response.json() as { href?: string };
+    let url: URL;
+    try { url = new URL(link.href || ""); } catch { throw new DomainError(502, "Invalid video playback URL", "invalid_video_source"); }
+    if (url.protocol !== "https:" || url.username || url.password || !/(^|\.)(yandex\.(ru|net|com)|yandexusercontent\.com)$/.test(url.hostname)) throw new DomainError(502, "Invalid video playback host", "invalid_video_source");
+    return { url: url.href };
   }
 
   private async items<T extends DirectusRecord>(collection: string, query: URLSearchParams) {
@@ -637,13 +659,21 @@ export class ContentPlatformService {
 
   async runtimeUpdateMedia(workspaceId: string, botSlug: string, mediaId: number, changes: Record<string, unknown>) {
     const binding = this.binding(workspaceId, botSlug);
-    const records = await this.recordsForBot(binding);
-    if (!records.media.some((item) => item.id === mediaId)) throw new DomainError(404, "Media item was not found", "content_media_not_found");
+    const bot = await this.contentBot(binding);
+    const [current] = await this.items<DirectusRecord>("media_assets", new URLSearchParams({ "filter[bot][_eq]": String(bot.id), "filter[id][_eq]": String(mediaId), limit: "1", fields: "*" }));
+    if (!current || current.id !== mediaId) throw new DomainError(404, "Media item was not found", "content_media_not_found");
+    if (changes.yandex_path !== undefined && changes.yandex_path !== current.yandex_path) throw new DomainError(409, "The source file changed during preparation", "media_source_changed");
+    const preparation = changes.preparation === undefined ? undefined : validateMediaProgress(changes.preparation);
     const allowed = new Set(["status", "vk_attachment", "telegram_file_id", "mime_type", "file_size", "error_message"]);
     const body = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.has(key)));
-    if (!Object.keys(body).length) throw new DomainError(400, "No supported media fields were supplied", "invalid_media_update");
+    if (!Object.keys(body).length && !preparation) throw new DomainError(400, "No supported media fields were supplied", "invalid_media_update");
     if (body.status !== undefined && !mediaStatuses.has(body.status as MediaPreparationStatus)) throw new DomainError(400, "Media status is invalid", "invalid_media_status");
-    const item = await this.patchItem<DirectusRecord>("media_assets", mediaId, body);
+    const item = Object.keys(body).length ? await this.patchItem<DirectusRecord>("media_assets", mediaId, body) : current;
+    if (preparation && body.status === "processing") await this.progress?.begin(workspaceId, botSlug, mediaId, String(current.yandex_path), preparation).catch(() => console.warn("Media progress is temporarily unavailable"));
+    else if (preparation && current.status === "processing" && !body.status) {
+      if (!await this.progress?.update(workspaceId, botSlug, mediaId, String(current.yandex_path), preparation)) return item;
+    } else if (preparation && !body.status) return item;
+    if (body.status && body.status !== "processing") await this.clearProgress(workspaceId, botSlug, mediaId);
     await this.notifyMedia(workspaceId, botSlug);
     return item;
   }
@@ -699,6 +729,7 @@ export class ContentPlatformService {
     const bot = await this.contentBot(binding);
     const media = await this.items<DirectusRecord>("media_assets", new URLSearchParams({ "filter[bot][_eq]": String(bot.id), limit: "-1", fields: "*" }));
     const readyIds = await this.readyMediaIds(binding, bot.id, media);
+    const preparations = await this.progress?.list(workspaceId, botSlug).catch(() => new Map());
     return media.sort((a, b) => b.id - a.id).map((item) => ({
       id: item.id,
       name: String(item.name ?? ""),
@@ -706,6 +737,7 @@ export class ContentPlatformService {
       yandexPath: String(item.yandex_path ?? ""),
       status: String(item.status ?? "draft"),
       canAttach: readyIds.has(item.id),
+      preparation: item.status === "processing" && preparations?.get(item.id)?.sourcePath === item.yandex_path ? preparations?.get(item.id) : undefined,
       vkAttachment: String(item.vk_attachment ?? ""),
       telegramFileId: String(item.telegram_file_id ?? ""),
       mimeType: String(item.mime_type ?? ""),
@@ -728,6 +760,10 @@ export class ContentPlatformService {
   private async notifyMedia(workspaceId: string, botSlug: string, operation: "insert" | "update" | "delete" = "update") {
     // Losing a live update must not turn a completed upload into a failed job. The UI also catches up periodically.
     await this.realtime?.notifyContentMedia(workspaceId, botSlug, operation).catch(() => console.warn("Content media live update could not be published"));
+  }
+
+  private async clearProgress(workspaceId: string, botSlug: string, mediaId: number) {
+    await this.progress?.clear(workspaceId, botSlug, mediaId).catch(() => console.warn("Media progress cleanup is temporarily unavailable"));
   }
 
   private async assertMediaOwned(binding: ContentPlatformBinding, botId: number, mediaIds: number[]) {
@@ -851,6 +887,7 @@ export class ContentPlatformService {
     if (!current) throw new DomainError(404, "Media item was not found", "content_media_not_found");
     const sourceChanged = current.yandex_path !== validated.yandexPath || current.kind !== validated.kind;
     await this.patchItem("media_assets", mediaId, { name: validated.name, kind: validated.kind, yandex_path: validated.yandexPath, status: sourceChanged ? "queued" : validated.status, ...(sourceChanged ? { vk_attachment: null, telegram_file_id: null, error_message: null } : {}) });
+    if (sourceChanged || validated.status !== "processing") await this.clearProgress(workspaceId, botSlug, mediaId);
     await this.notifyMedia(workspaceId, botSlug);
     return (await this.listMedia(workspaceId, botSlug)).find((media) => media.id === mediaId);
   }
@@ -863,6 +900,7 @@ export class ContentPlatformService {
     const usageCount = records.blocks.filter((block) => relationId(block.media) === mediaId).length;
     if (usageCount) throw new DomainError(409, "Remove this file from all auto-replies before deleting it", "content_media_in_use");
     await this.deleteItem("media_assets", mediaId);
+    await this.clearProgress(workspaceId, botSlug, mediaId);
     await this.notifyMedia(workspaceId, botSlug, "delete");
     return { ok: true };
   }
