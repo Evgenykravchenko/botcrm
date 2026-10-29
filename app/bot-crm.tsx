@@ -9,7 +9,7 @@ import { CampaignMedia, CampaignRichContent, validateCampaignRichContent } from 
 import { CampaignSchedulePicker, campaignTimeZoneLabel, defaultCampaignSchedule } from "./ui/campaign-schedule-picker";
 import { isDarkTheme, isThemeName, ThemePicker, type ThemeName } from "./ui/theme-picker";
 import { KeywordRepliesView } from "./keyword-replies-view";
-import { botcrmApi, ApiAdminUser, ApiAnalytics, ApiAttachment, ApiAttributeDefinition, ApiAutomationInput, ApiAutomationRule, ApiAutomationRun, ApiAutomationTrigger, ApiCampaign, ApiCampaignButton, ApiCampaignRecipient, ApiContact, ApiConnector, ApiConnectorInput, ApiConversation, ApiDeal, ApiError, ApiMessage, ApiPipeline, ApiSearchResult, ApiSegment, ApiSegmentCondition, ApiSegmentGroup, ApiServiceToken, ApiSession, ApiTeam, ApiUser, ApiRealtimeStatus, setAuthToken, subscribeToRealtime } from "./api-client";
+import { botcrmApi, ApiAdminUser, ApiAnalytics, ApiAttachment, ApiAttributeDefinition, ApiAutomationInput, ApiAutomationRule, ApiAutomationRun, ApiAutomationTrigger, ApiCampaign, ApiCampaignButton, ApiCampaignRecipient, ApiContact, ApiConnector, ApiConnectorInput, ApiConversation, ApiDeal, ApiError, ApiMessage, ApiPipeline, ApiSearchResult, ApiSegment, ApiSegmentCondition, ApiSegmentGroup, ApiServiceToken, ApiSession, ApiTeam, ApiUser, ApiRealtimeStatus, apiRetryAt, setAuthToken, subscribeToApiRateLimit, subscribeToRealtime } from "./api-client";
 import { AlertTriangle, ArrowUpRight, BarChart3, Bot, BookOpen, Calendar, Check, CheckCheck, ChevronDown, Circle, Columns3, Copy, Database, ExternalLink, Eye, GripVertical, Inbox, Mail, Megaphone, Menu, MessageCircle, MessageSquareReply, Mic, MoreHorizontal, Paperclip, Pause, Pencil, Phone, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, SlidersHorizontal, Smile, Tag, User, Users, Workflow, X, Zap } from "lucide-react";
 
 type Section = "inbox" | "contacts" | "pipeline" | "campaigns" | "keywordReplies" | "automations" | "integrations" | "analytics" | "settings";
@@ -134,12 +134,13 @@ export function BotCRM() {
   const [campaignEditor, setCampaignEditor] = useState<ApiCampaign | null>(null);
   const [startingCampaignId, setStartingCampaignId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [apiStatus, setApiStatus] = useState<"connecting" | "online" | "offline">("connecting");
+  const [apiStatus, setApiStatus] = useState<"connecting" | "online" | "rate-limited" | "offline">("connecting");
   const [realtimeStatus, setRealtimeStatus] = useState<ApiRealtimeStatus>("connecting");
   const [liveRevision, setLiveRevision] = useState(0);
   const [contentMediaChange, setContentMediaChange] = useState<{ botSlug?: string; revision: number }>({ revision: 0 });
   const [lastRealtimeAt, setLastRealtimeAt] = useState("");
   const [authState, setAuthState] = useState<"checking" | "authenticated" | "login">("checking");
+  const [authRetryAt, setAuthRetryAt] = useState(0);
   const [currentUser, setCurrentUser] = useState<ApiUser | null>(null);
   const [accountModal, setAccountModal] = useState(false);
   const selected = conversations.find((item) => item.id === selectedId);
@@ -171,17 +172,23 @@ export function BotCRM() {
       setSelectedId((current) => mapped.some((item) => item.id === current) ? current : "");
       setApiStatus("online");
     } catch (error) {
-      setApiStatus("offline");
+      setApiStatus(error instanceof ApiError && error.status === 429 ? "rate-limited" : "offline");
       if (!silent) notify(error instanceof ApiError ? `API: ${error.message}` : "API недоступен — реальные данные не загружены");
     }
   }
   async function initializeAuth() {
+    setAuthRetryAt(0);
     try {
       const user = await botcrmApi.me();
       setCurrentUser(user);
       setAuthState("authenticated");
       await loadWorkspace(true);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 429) {
+        setApiStatus("rate-limited");
+        setAuthRetryAt(error.retryAt || Date.now() + 5000);
+        return;
+      }
       if (error instanceof ApiError && error.status === 401) {
         setAuthState("login");
         setApiStatus("offline");
@@ -192,6 +199,11 @@ export function BotCRM() {
     }
   }
   useEffect(() => { void initializeAuth(); }, []);
+  useEffect(() => {
+    if (!authRetryAt || authState !== "checking") return;
+    const timer = window.setTimeout(() => void initializeAuth(), Math.min(2_147_000_000, Math.max(0, authRetryAt - Date.now())));
+    return () => window.clearTimeout(timer);
+  }, [authRetryAt, authState]);
   useEffect(() => {
     const storedTheme = window.localStorage.getItem("botcrm_theme");
     if (isThemeName(storedTheme)) setTheme(storedTheme);
@@ -222,21 +234,25 @@ export function BotCRM() {
     let running = false;
     let pending = false;
     let debounceTimer: number | undefined;
+    let lastStarted = 0;
 
     const pageVisible = () => document.visibilityState !== "hidden";
     const synchronize = async () => {
       if (!active || !pageVisible()) { pending = true; return; }
       if (running) { pending = true; return; }
+      const retryAt = apiRetryAt();
+      if (retryAt) { setApiStatus("rate-limited"); schedule(); return; }
       running = true;
-      do {
-        pending = false;
-        await loadWorkspace(true);
-      } while (active && pending && pageVisible());
+      pending = false;
+      lastStarted = Date.now();
+      await loadWorkspace(true);
       running = false;
+      if (active && (pending || apiRetryAt())) schedule();
     };
     const schedule = () => {
-      if (debounceTimer !== undefined) return;
-      debounceTimer = window.setTimeout(() => { debounceTimer = undefined; void synchronize(); }, 250);
+      if (!active || debounceTimer !== undefined) return;
+      const delay = Math.max(250, 2000 - (Date.now() - lastStarted), apiRetryAt() - Date.now());
+      debounceTimer = window.setTimeout(() => { debounceTimer = undefined; void synchronize(); }, Math.min(2_147_000_000, delay));
     };
     const unsubscribe = subscribeToRealtime(
       (event) => {
@@ -246,13 +262,15 @@ export function BotCRM() {
       },
       (status) => { if (active) { setRealtimeStatus(status); if (status === "live") schedule(); } },
     );
-    const catchUp = () => { if (document.visibilityState === "visible") void synchronize(); };
-    const fallback = window.setInterval(() => { if (document.visibilityState === "visible") void synchronize(); }, 30_000);
+    const unsubscribeLimits = subscribeToApiRateLimit(() => { setApiStatus("rate-limited"); schedule(); });
+    const catchUp = () => { if (document.visibilityState === "visible") schedule(); };
+    const fallback = window.setInterval(catchUp, 30_000);
     window.addEventListener("focus", catchUp);
     document.addEventListener("visibilitychange", catchUp);
     return () => {
       active = false;
       unsubscribe();
+      unsubscribeLimits();
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
       window.clearInterval(fallback);
       window.removeEventListener("focus", catchUp);
@@ -459,7 +477,7 @@ export function BotCRM() {
       setStartingCampaignId(null);
     }
   }
-  if (authState === "checking") return <div className="auth-shell"><div className="auth-loading"><div className="brand-mark"><MessageCircle size={24} /></div><RefreshCw className="spin" size={22} /><span>Подключаем BotCRM…</span></div></div>;
+  if (authState === "checking") return <div className="auth-shell"><div className="auth-loading"><div className="brand-mark"><MessageCircle size={24} /></div><RefreshCw className="spin" size={22} /><span>{apiStatus === "rate-limited" ? "Сервер ограничил частоту запросов. Повторяем подключение…" : "Подключаем BotCRM…"}</span></div></div>;
   if (authState === "login") return <LoginScreen onLogin={login} />;
   const title = sectionTitles[section];
   return <div className="app-shell" data-theme={theme} data-color-scheme={isDarkTheme(theme) ? "dark" : "light"}>
@@ -468,7 +486,7 @@ export function BotCRM() {
       <div className="workspace-control"><button className="workspace-switch" onClick={() => setWorkspaceMenu(!workspaceMenu)} aria-expanded={workspaceMenu}><div className="workspace-avatar">BS</div><span><b>Bot Studio</b><small>Локальная PostgreSQL</small></span><ChevronDown size={15} /></button>{workspaceMenu && <div className="workspace-popover"><b>Bot Studio</b><p>{hasDemoData ? <>Сейчас подключено одно рабочее пространство. Стартовые записи созданы из <code>infra/seed.sql</code> и являются демонстрационными.</> : <>Подключено одно рабочее пространство с реальными данными PostgreSQL.</>}</p>{canAdmin && <button onClick={() => { setWorkspaceMenu(false); setSection("settings"); }}>Настройки команды</button>}</div>}</div>{hasDemoData && <div className="demo-data-notice"><Database size={14} /><span><b>Демо-данные</b><small>Не реальные клиенты</small></span></div>}
       <nav className="nav-list"><p className="nav-label">Рабочее пространство</p>{visibleNavItems.map((item) => { const badge = item.id === "inbox" ? conversations.reduce((sum, conversation) => sum + conversation.unread, 0) : item.id === "pipeline" ? stages.reduce((sum, stage) => sum + stage.deals.length, 0) : 0; return <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => { setSection(item.id); setMobileNav(false); }}><item.icon size={19} /><span>{item.label}</span>{badge > 0 && <em>{badge}</em>}</button>; })}</nav>
       <button className="docs-nav-link" onClick={() => { window.location.href = "/docs"; }}><BookOpen size={18}/><span><b>Документация</b><small>Запуск, работа и API</small></span><ExternalLink size={14}/></button>
-      <div className="sidebar-bottom"><div className={`system-health ${apiStatus === "offline" ? "offline" : realtimeStatus === "offline" ? "realtime-offline" : ""}`}><span><i />{apiStatus === "online" ? "API подключён" : apiStatus === "connecting" ? "Подключение к API…" : "API недоступен"}</span><small>{apiStatus !== "online" ? "Ожидаем восстановление соединения" : realtimeStatus === "live" ? (lastRealtimeAt ? `Realtime · обновлено ${lastRealtimeAt}` : "Обновления в реальном времени") : realtimeStatus === "connecting" ? "Подключаем realtime…" : "Realtime переподключается…"}</small></div><button className="profile-button" onClick={() => setAccountModal(true)}><div className="profile-avatar">{initials(currentUser?.displayName || "Евгений")}</div><span><b>{currentUser?.displayName || "Евгений"}</b><small>{roleLabel(currentUser?.role)}</small></span><MoreHorizontal size={17} /></button></div>
+      <div className="sidebar-bottom"><div className={`system-health ${apiStatus === "rate-limited" || realtimeStatus === "rate-limited" ? "rate-limited" : apiStatus === "offline" ? "offline" : realtimeStatus === "offline" ? "realtime-offline" : ""}`}><span><i />{apiStatus === "rate-limited" || realtimeStatus === "rate-limited" ? "Пауза обновлений" : apiStatus === "online" ? "API подключён" : apiStatus === "connecting" ? "Подключение к API…" : "API недоступен"}</span><small>{apiStatus === "rate-limited" || realtimeStatus === "rate-limited" ? "Лимит запросов. Продолжим автоматически" : apiStatus !== "online" ? "Ожидаем восстановление соединения" : realtimeStatus === "live" ? (lastRealtimeAt ? `Realtime · обновлено ${lastRealtimeAt}` : "Обновления в реальном времени") : realtimeStatus === "connecting" ? "Подключаем realtime…" : "Realtime переподключается…"}</small></div><button className="profile-button" onClick={() => setAccountModal(true)}><div className="profile-avatar">{initials(currentUser?.displayName || "Евгений")}</div><span><b>{currentUser?.displayName || "Евгений"}</b><small>{roleLabel(currentUser?.role)}</small></span><MoreHorizontal size={17} /></button></div>
     </aside>
     <main className="main-area">
       <header className="topbar"><div className="topbar-title"><button className="icon-button mobile-menu" onClick={() => setMobileNav(!mobileNav)}><Menu size={20} /></button><div><h1>{title.title}</h1><p>{title.subtitle}</p></div></div><GlobalSearch onOpen={(result) => { if (result.conversationId) { setSelectedId(result.conversationId); setSection("inbox"); } else if (result.type === "deal") setSection("pipeline"); else setSection("contacts"); }} /><div className="topbar-actions"><ThemePicker value={theme} onChange={(nextTheme) => { setTheme(nextTheme); window.localStorage.setItem("botcrm_theme", nextTheme); }} /><div className="notification-control"><button className={`icon-button notification-button ${notificationsOpen ? "active" : ""}`} onClick={() => setNotificationsOpen(!notificationsOpen)} aria-label="Уведомления" aria-expanded={notificationsOpen}><Circle size={19} />{conversations.some((item) => item.unread > 0) && <i />}</button>{notificationsOpen && <div className="notification-popover"><header><b>Уведомления</b><span>{conversations.reduce((sum, item) => sum + item.unread, 0)} новых</span></header>{conversations.filter((item) => item.unread > 0).slice(0, 5).map((item) => <button key={item.id} onClick={() => { void openConversation(item.id); setSection("inbox"); setNotificationsOpen(false); }}><ContactAvatar contactId={item.contactId} channel={item.channel} avatarAvailable={item.avatarAvailable} avatarVersion={item.avatarVersion} initials={item.initials} seed={item.id} size="sm" /><div><b>{item.name}</b><small>{item.preview}</small></div><em>{item.unread}</em></button>)}{!conversations.some((item) => item.unread > 0) && <p>Новых сообщений нет.</p>}</div>}</div>{section === "pipeline" && canSupervise && <button className="button secondary" onClick={() => setPipelineSettings(true)}><Settings size={16} />Настроить</button>}{section === "campaigns" && canSupervise && <button className="button primary" onClick={() => { setCampaignEditor(null); setCampaignComposer(true); }}><Plus size={17} />Новая рассылка</button>}{section === "automations" && canSupervise && <button className="button primary" onClick={() => setAutomationComposer(true)}><Plus size={17} />Новое правило</button>}{section === "integrations" && canAdmin && <button className="button primary" onClick={() => setConnectorComposer(true)}><Plus size={17} />Подключить</button>}</div></header>

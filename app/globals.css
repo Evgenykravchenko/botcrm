@@ -699,8 +699,8 @@ button { cursor: pointer; }
 .chat-jump-latest:hover{border-color:color-mix(in srgb,var(--primary) 38%,var(--line));background:var(--primary-soft)}
 @media(max-width:680px){.app-shell{height:100dvh}.chat-jump-latest{right:14px;bottom:106px}}
 /* Live workspace sync and non-destructive inbox filters */
-.system-health.realtime-offline{border-color:#4a412d;background:rgba(215,164,54,.07)}
-.system-health.realtime-offline i{background:#d8a437;box-shadow:0 0 0 4px rgba(216,164,55,.11)}
+.system-health.realtime-offline,.system-health.rate-limited{border-color:#4a412d;background:rgba(215,164,54,.07)}
+.system-health.realtime-offline i,.system-health.rate-limited i{background:#d8a437;box-shadow:0 0 0 4px rgba(216,164,55,.11)}
 .conversation-controls{position:relative;z-index:12;min-height:0;border-bottom:1px solid var(--line);background:var(--surface)}
 .conversation-controls .search-row{padding-bottom:10px}
 .inbox-filter-toggle{position:relative;flex:0 0 auto}

@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, LoaderCircle, Play, X } from "lucide-react";
-import { botcrmApi } from "./api-client";
+import { ApiError, botcrmApi } from "./api-client";
 
 export function useDiskPreview(botSlug: string, path: string, enabled = true) {
   const [url, setUrl] = useState("");
@@ -13,11 +13,21 @@ export function useDiskPreview(botSlug: string, path: string, enabled = true) {
     if (!enabled || !botSlug || !path) return;
     let active = true;
     let objectUrl = "";
-    void botcrmApi.contentDiskPreview(botSlug, path).then((blob) => {
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => {
       if (!active) return;
-      objectUrl = URL.createObjectURL(blob); setUrl(objectUrl);
-    }).catch(() => { if (active) setFailed(true); });
-    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+      void botcrmApi.contentDiskPreview(botSlug, path).then((blob) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob); setUrl(objectUrl);
+      }).catch((error) => {
+        if (!active) return;
+        if (error instanceof ApiError && error.status === 429) {
+          retryTimer = setTimeout(load, Math.min(2_147_000_000, Math.max(1000, (error.retryAt || Date.now() + 5000) - Date.now())));
+        } else setFailed(true);
+      });
+    };
+    load();
+    return () => { active = false; clearTimeout(retryTimer); if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [botSlug, path, enabled]);
   return { url, failed };
 }

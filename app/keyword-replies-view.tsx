@@ -153,16 +153,20 @@ export function KeywordRepliesView({ canManage, canAdmin, mediaChange }: { canMa
   const [issuedToken, setIssuedToken] = useState<IssuedToken | null>(null);
   const [botDialogOpen, setBotDialogOpen] = useState(false);
   const [creatingBot, setCreatingBot] = useState(false);
+  const [retry, setRetry] = useState<{ kind: "bots" | "content"; at: number; slug?: string } | null>(null);
 
-  async function loadBots() {
+  const loadBots = useCallback(async () => {
     setLoading(true); setError("");
     try {
       const items = await botcrmApi.contentBots();
       setBots(items);
       setBotSlug((current) => items.some((item) => item.botSlug === current) ? current : items[0]?.botSlug || "");
-    } catch (loadError) { setError(errorText(loadError, "Не удалось подключиться к платформе контента")); }
+    } catch (loadError) {
+      setError(errorText(loadError, "Не удалось подключиться к платформе контента"));
+      if (loadError instanceof ApiError && loadError.status === 429) setRetry({ kind: "bots", at: loadError.retryAt || Date.now() + 5000 });
+    }
     finally { setLoading(false); }
-  }
+  }, []);
 
   const loadContent = useCallback(async (slug = botSlug, quiet = false) => {
     if (!slug) return;
@@ -172,12 +176,24 @@ export function KeywordRepliesView({ canManage, canAdmin, mediaChange }: { canMa
       const [nextRules, nextMedia, nextSettings] = await Promise.all([botcrmApi.keywordReplies(slug), botcrmApi.contentMedia(slug), botcrmApi.keywordReplySettings(slug)]);
       if (currentBotRef.current !== slug) return;
       setRules(nextRules); setMedia(nextMedia); setSettings(nextSettings);
-    } catch (loadError) { setError(errorText(loadError, "Не удалось загрузить автоответы")); }
+    } catch (loadError) {
+      if (currentBotRef.current !== slug) return;
+      setError(errorText(loadError, "Не удалось загрузить автоответы"));
+      if (loadError instanceof ApiError && loadError.status === 429) setRetry({ kind: "content", slug, at: loadError.retryAt || Date.now() + 5000 });
+    }
     finally { setLoading(false); setRefreshing(false); }
   }, [botSlug]);
 
-  useEffect(() => { void loadBots(); }, []);
+  useEffect(() => { void loadBots(); }, [loadBots]);
   useEffect(() => { if (botSlug) void loadContent(botSlug); }, [botSlug, loadContent]);
+  useEffect(() => {
+    if (!retry || (retry.kind === "content" && retry.slug !== botSlug)) return;
+    const timer = window.setTimeout(() => {
+      setRetry(null);
+      if (retry.kind === "bots") void loadBots(); else void loadContent(retry.slug, true);
+    }, Math.min(2_147_000_000, Math.max(0, retry.at - Date.now())));
+    return () => window.clearTimeout(timer);
+  }, [retry, botSlug, loadBots, loadContent]);
   useEffect(() => {
     if (!botSlug) return;
     let active = true;
@@ -325,7 +341,7 @@ export function KeywordRepliesView({ canManage, canAdmin, mediaChange }: { canMa
     {error && <div className="keyword-inline-error"><AlertCircle size={16}/><span>{error}</span><button onClick={() => void loadContent(botSlug)}>Повторить</button></div>}
     {tab === "rules" && <RulesPanel rules={rules} canManage={canManage} edit={setEditor} remove={(item) => setDeleteTarget({ type: "rule", item })}/>} 
     {tab === "media" && <MediaPanel media={media} botSlug={botSlug} canManage={canManage} edit={setMediaEditor} remove={(item) => setDeleteTarget({ type: "media", item })}/>}
-    {tab === "fallback" && <FallbackPanel botSlug={botSlug} rules={rules} value={settings} canManage={canManage} saved={(next) => { setSettings(next); setNotice({ tone: "success", text: "Ответ по умолчанию сохранён" }); }}/>} 
+    {tab === "fallback" && <FallbackPanel key={botSlug} botSlug={botSlug} rules={rules} value={settings} canManage={canManage} saved={(next) => { setSettings(next); setNotice({ tone: "success", text: "Ответ по умолчанию сохранён" }); }}/>}
     {editor && <RuleEditor key={botSlug} initial={editor === "new" ? undefined : editor} botSlug={botSlug} media={media} mediaCreated={(item) => setMedia((items) => items.some((candidate) => candidate.id === item.id) ? items.map((candidate) => candidate.id === item.id ? item : candidate) : [item, ...items])} mediaRemoved={removeMedia} close={() => setEditor(null)} save={saveRule}/>}
     {mediaEditor && <MediaEditor initial={mediaEditor === "new" ? undefined : mediaEditor} botSlug={botSlug} close={() => setMediaEditor(null)} save={saveMedia}/>} 
     {deleteTarget && <DeleteConfirmationDialog target={deleteTarget} busy={deleting} close={() => setDeleteTarget(null)} confirm={() => void confirmRemoval()}/>} 
@@ -361,10 +377,11 @@ function FallbackPanel({ botSlug, rules, value, canManage, saved }: { botSlug: s
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => setDraft(value), [value]);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { if (!dirty) setDraft(value); }, [value, dirty]);
   const selectedFallback = draft.fallbackResponseId ? rules.find((rule) => rule.response.id === draft.fallbackResponseId) : undefined;
-  async function submit(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); try { saved(await botcrmApi.updateKeywordReplySettings(botSlug, { unknownMessage: draft.unknownMessage, fallbackResponseId: draft.fallbackResponseId || null })); } catch (saveError) { setError(errorText(saveError, "Не удалось сохранить")); } finally { setSaving(false); } }
-  return <section className="fallback-layout"><form className="fallback-card" onSubmit={submit}><header><span><Settings2 size={19}/></span><div><h3>Если правило не найдено</h3><p>Выберите один понятный ответ, который получит пользователь.</p></div></header><label className="form-field"><span>Короткое сообщение</span><textarea rows={4} value={draft.unknownMessage} onChange={(event) => setDraft({ ...draft, unknownMessage: event.target.value })} disabled={!canManage} placeholder="Например: Не нашёл подходящий материал. Попробуйте другое слово."/></label><div className="form-field"><span>Или выдать полноценный готовый ответ</span><AppSelect ariaLabel="Готовый запасной ответ" value={draft.fallbackResponseId ? String(draft.fallbackResponseId) : ""} onValueChange={(value) => setDraft({ ...draft, fallbackResponseId: value ? Number(value) : undefined })} disabled={!canManage} options={[{ value: "", label: "Только короткое сообщение", detail: "Без файлов и кнопок" }, ...rules.map((rule) => ({ value: String(rule.response.id), label: rule.response.name, detail: "Готовый ответ с его содержимым" }))]} matchTriggerWidth/></div><div className="fallback-tip"><AlertCircle size={15}/><span>Если выбран готовый ответ, бот сможет отправить его текст, медиа и кнопки. Короткое сообщение останется запасным вариантом.</span></div>{error && <p className="form-error">{error}</p>}{canManage && <button className="button primary" disabled={saving}>{saving ? <LoaderCircle className="spin" size={15}/> : <Save size={15}/>}Сохранить</button>}</form><aside className="fallback-preview"><span className="eyebrow">Предпросмотр</span><div className="preview-bot"><Bot size={16}/><b>Бот</b></div><div className="preview-message">{selectedFallback ? selectedFallback.response.fallbackText || activeText(selectedFallback) : draft.unknownMessage || "Бот ничего не отправит."}</div><small>Так выглядит запасной ответ без найденного ключевого слова.</small></aside></section>;
+  async function submit(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); try { saved(await botcrmApi.updateKeywordReplySettings(botSlug, { unknownMessage: draft.unknownMessage, fallbackResponseId: draft.fallbackResponseId || null })); setDirty(false); } catch (saveError) { setError(errorText(saveError, "Не удалось сохранить")); } finally { setSaving(false); } }
+  return <section className="fallback-layout"><form className="fallback-card" onSubmit={submit}><header><span><Settings2 size={19}/></span><div><h3>Если правило не найдено</h3><p>Выберите один понятный ответ, который получит пользователь.</p></div></header><label className="form-field"><span>Короткое сообщение</span><textarea rows={4} value={draft.unknownMessage} onChange={(event) => { setDirty(true); setDraft({ ...draft, unknownMessage: event.target.value }); }} disabled={!canManage} placeholder="Например: Не нашёл подходящий материал. Попробуйте другое слово."/></label><div className="form-field"><span>Или выдать полноценный готовый ответ</span><AppSelect ariaLabel="Готовый запасной ответ" value={draft.fallbackResponseId ? String(draft.fallbackResponseId) : ""} onValueChange={(value) => { setDirty(true); setDraft({ ...draft, fallbackResponseId: value ? Number(value) : undefined }); }} disabled={!canManage} options={[{ value: "", label: "Только короткое сообщение", detail: "Без файлов и кнопок" }, ...rules.map((rule) => ({ value: String(rule.response.id), label: rule.response.name, detail: "Готовый ответ с его содержимым" }))]} matchTriggerWidth/></div><div className="fallback-tip"><AlertCircle size={15}/><span>Если выбран готовый ответ, бот сможет отправить его текст, медиа и кнопки. Короткое сообщение останется запасным вариантом.</span></div>{error && <p className="form-error">{error}</p>}{canManage && <button className="button primary" disabled={saving}>{saving ? <LoaderCircle className="spin" size={15}/> : <Save size={15}/>}Сохранить</button>}</form><aside className="fallback-preview"><span className="eyebrow">Предпросмотр</span><div className="preview-bot"><Bot size={16}/><b>Бот</b></div><div className="preview-message">{selectedFallback ? selectedFallback.response.fallbackText || activeText(selectedFallback) : draft.unknownMessage || "Бот ничего не отправит."}</div><small>Так выглядит запасной ответ без найденного ключевого слова.</small></aside></section>;
 }
 
 function mediaGlyph(kind: ApiContentMedia["kind"], size = 20) {
