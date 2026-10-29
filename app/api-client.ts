@@ -205,7 +205,8 @@ export interface ApiKeywordReplyInput {
   enabled?: boolean;
   response: { name: string; status?: "draft" | "published"; fallbackText?: string; blocks?: ApiKeywordReplyBlock[]; buttons?: ApiKeywordReplyButton[]; };
 }
-export interface ApiContentMedia { id: number; name: string; kind: Exclude<ApiKeywordBlockKind, "text">; yandexPath: string; status: "draft" | "queued" | "processing" | "ready" | "error"; canAttach?: boolean; vkAttachment: string; telegramFileId: string; mimeType: string; fileSize?: number; errorMessage: string; }
+export interface ApiMediaPreparation { attemptId: string; stage: "connecting" | "transferring" | "finalizing"; transferredBytes: number; totalBytes: number | null; bytesPerSecond: number | null; etaSeconds: number | null; updatedAt: string; }
+export interface ApiContentMedia { id: number; name: string; kind: Exclude<ApiKeywordBlockKind, "text">; yandexPath: string; status: "draft" | "queued" | "processing" | "ready" | "error"; canAttach?: boolean; preparation?: ApiMediaPreparation; vkAttachment: string; telegramFileId: string; mimeType: string; fileSize?: number; errorMessage: string; }
 export interface ApiContentMediaInput { name: string; kind: ApiContentMedia["kind"]; yandexPath: string; status?: ApiContentMedia["status"]; }
 export interface ApiYandexDiskItem { name: string; path: string; type: "file" | "dir"; kind?: ApiContentMedia["kind"]; mimeType?: string; size?: number; previewUrl?: string; }
 export interface ApiYandexDiskListing { root: string; path: string; items: ApiYandexDiskItem[]; }
@@ -226,13 +227,13 @@ function apiBase() {
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:4100/api/v1";
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 8_000): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("accept", "application/json");
   headers.set("x-workspace-id", "ws_demo");
   if (typeof window !== "undefined") { const token = window.localStorage.getItem("botcrm_auth_token"); if (token) headers.set("authorization", `Bearer ${token}`); }
   if (init.body) headers.set("content-type", "application/json");
-  const response = await fetch(`${apiBase()}${path}`, { ...init, headers, signal: AbortSignal.timeout(8_000) });
+  const response = await fetch(`${apiBase()}${path}`, { ...init, headers, signal: AbortSignal.timeout(timeoutMs) });
   const payload = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
   if (!response.ok) throw new ApiError(response.status, payload?.error?.code || "request_failed", payload?.error?.message || `API returned ${response.status}`);
   return payload as T;
@@ -247,6 +248,33 @@ async function requestBlob(path: string) {
     throw new ApiError(response.status, payload?.error?.code || "request_failed", payload?.error?.message || `API returned ${response.status}`);
   }
   return response.blob();
+}
+
+// Share only small thumbnails, scoped to the current login/API. Originals are never buffered here.
+const diskPreviewCache = new Map<string, { promise: Promise<Blob>; expiresAt: number; size: number }>();
+let diskPreviewSession = "";
+function cachedDiskPreview(botSlug: string, path: string) {
+  const session = `${apiBase()}:${typeof window === "undefined" ? "" : window.localStorage.getItem("botcrm_auth_token") || ""}`;
+  if (session !== diskPreviewSession) { diskPreviewCache.clear(); diskPreviewSession = session; }
+  const key = JSON.stringify([botSlug, path]);
+  const cached = diskPreviewCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+  const entry = { promise: Promise.resolve(new Blob()), expiresAt: Date.now() + 120_000, size: 0 };
+  entry.promise = requestBlob(`/keyword-replies/media/preview?botSlug=${encodeURIComponent(botSlug)}&path=${encodeURIComponent(path)}`).catch(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    return requestBlob(`/keyword-replies/media/preview?botSlug=${encodeURIComponent(botSlug)}&path=${encodeURIComponent(path)}`);
+  }).then((blob) => {
+    entry.size = blob.size;
+    if (diskPreviewCache.get(key) === entry && blob.size > 1024 * 1024) diskPreviewCache.delete(key);
+    let bytes = [...diskPreviewCache.values()].reduce((sum, item) => sum + item.size, 0);
+    for (const [oldKey, item] of diskPreviewCache) {
+      if (diskPreviewCache.size <= 32 && bytes <= 8 * 1024 * 1024 && item.expiresAt > Date.now()) break;
+      diskPreviewCache.delete(oldKey); bytes -= item.size;
+    }
+    return blob;
+  }).catch((error) => { if (diskPreviewCache.get(key) === entry) diskPreviewCache.delete(key); throw error; });
+  diskPreviewCache.set(key, entry);
+  return entry.promise;
 }
 
 export function setAuthToken(token?: string) {
@@ -414,7 +442,8 @@ search: (query: string, limit = 30) => request<ApiSearchResult[]>(`/search?q=${e
   updateKeywordReplySettings: (botSlug: string, input: { unknownMessage?: string; fallbackResponseId?: number | null }) => request<ApiKeywordReplySettings>(`/keyword-replies/configuration?botSlug=${encodeURIComponent(botSlug)}`, { method: "PATCH", body: JSON.stringify(input) }),
   contentMedia: (botSlug: string) => request<ApiContentMedia[]>(`/keyword-replies/media?botSlug=${encodeURIComponent(botSlug)}`),
   contentDiskFiles: (botSlug: string, path?: string) => request<ApiYandexDiskListing>(`/keyword-replies/media/files?botSlug=${encodeURIComponent(botSlug)}${path ? `&path=${encodeURIComponent(path)}` : ""}`),
-  contentDiskPreview: (botSlug: string, path: string) => requestBlob(`/keyword-replies/media/preview?botSlug=${encodeURIComponent(botSlug)}&path=${encodeURIComponent(path)}`),
+  contentDiskPreview: (botSlug: string, path: string) => cachedDiskPreview(botSlug, path),
+  contentVideoPlayback: (botSlug: string, path: string) => request<{ url: string }>(`/keyword-replies/media/playback?botSlug=${encodeURIComponent(botSlug)}&path=${encodeURIComponent(path)}`, undefined, 20_000),
   createContentMedia: (botSlug: string, input: ApiContentMediaInput) => request<ApiContentMedia>(`/keyword-replies/media?botSlug=${encodeURIComponent(botSlug)}`, { method: "POST", body: JSON.stringify(input) }),
   updateContentMedia: (botSlug: string, id: number, input: ApiContentMediaInput) => request<ApiContentMedia>(`/keyword-replies/media/${id}?botSlug=${encodeURIComponent(botSlug)}`, { method: "PATCH", body: JSON.stringify(input) }),
   deleteContentMedia: (botSlug: string, id: number) => request<{ ok: boolean }>(`/keyword-replies/media/${id}?botSlug=${encodeURIComponent(botSlug)}`, { method: "DELETE" }),
