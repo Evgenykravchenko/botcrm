@@ -3,7 +3,7 @@ services:
   edge:
     image: caddy:2.10.2-alpine
     volumes:
-      - ../.runtime/edge:/etc/caddy:ro
+      - ${BOTCRM_EDGE_DIR:-../.runtime/edge}:/etc/caddy:ro
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     networks:

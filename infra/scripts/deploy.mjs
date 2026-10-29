@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseEnv } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
@@ -135,7 +135,7 @@ async function main() {
     await atomic(resolve(edgeDir, "proxy-trust.caddy"), `trusted_proxies static ${tailIp}/32\n`);
     await atomic(resolve(edgeDir, "Caddyfile"), (await readFile(resolve(root, "infra/Caddyfile.edge"), "utf8")).replace("STORAGE_DOMAIN", env.BOTCRM_STORAGE_DOMAIN));
     await atomic(resolve(edgeDir, "upstreams.caddy"), upstreamConfig(oldApi, oldWeb));
-    run(["docker", "compose", "--env-file", ".env.production", "-f", "infra/docker-compose.edge.yml", "up", "-d", "--no-deps", "edge"]);
+    run(["docker", "compose", "--env-file", ".env.production", "-f", "infra/docker-compose.edge.yml", "up", "-d", "--no-deps", "edge"], { BOTCRM_EDGE_DIR: await realpath(edgeDir) });
     run(["docker", "exec", "botcrm-edge-1", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]);
     run(["docker", "exec", "botcrm-edge-1", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"]);
 
