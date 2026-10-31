@@ -13,6 +13,18 @@ export const ASSISTANT_SECTIONS = [
   "settings",
 ] as const;
 export type AssistantSection = (typeof ASSISTANT_SECTIONS)[number];
+export interface AssistantKeywordDraft {
+  name: string;
+  phrase: string;
+  matchMode: "exact" | "contains" | "any_word" | "all_words";
+  text: string;
+  mediaIds: number[];
+  buttons: Array<{
+    label: string;
+    action: "text" | "open_link";
+    target: string;
+  }>;
+}
 export interface AssistantInput {
   requestId: string;
   message: string;
@@ -21,6 +33,8 @@ export interface AssistantInput {
   conversationId?: string;
   includeConversation?: boolean;
   history?: Array<{ role: "user" | "assistant"; text: string }>;
+  draft?: AssistantKeywordDraft;
+  continueKeyword?: boolean;
 }
 export interface AssistantContext {
   canManageContent: boolean;
@@ -42,6 +56,8 @@ export interface AssistantContext {
 export interface AssistantResult {
   requestId: string;
   text: string;
+  origin?: "knowledge" | "model" | "local";
+  clarification?: "phrase" | "link" | "media";
   navigateTo?: AssistantSection;
   keywordDraft?: { botSlug: string; input: KeywordReplyInput };
   replyDraft?: { conversationId: string; text: string };
@@ -58,25 +74,30 @@ const object = (properties: Record<string, unknown>) => ({
 const str = { type: "string" };
 export const ASSISTANT_SCHEMA = object({
   text: str,
+  clarification: {
+    type: ["string", "null"],
+    enum: ["phrase", "link", "media", null],
+  },
   navigateTo: { type: ["string", "null"], enum: [...ASSISTANT_SECTIONS, null] },
   keyword: {
     anyOf: [
       { type: "null" },
       object({
-        name: str,
-        phrase: str,
+        name: { type: "string", minLength: 1, maxLength: 200 },
+        phrase: { type: "string", minLength: 1, maxLength: 255 },
         matchMode: {
           type: "string",
           enum: ["exact", "contains", "any_word", "all_words"],
         },
-        text: str,
-        mediaIds: { type: "array", items: { type: "integer" } },
+        text: { type: "string", maxLength: 4000 },
+        mediaIds: { type: "array", maxItems: 10, items: { type: "integer" } },
         buttons: {
           type: "array",
+          maxItems: 5,
           items: object({
-            label: str,
+            label: { type: "string", minLength: 1, maxLength: 40 },
             action: { type: "string", enum: ["text", "open_link"] },
-            target: str,
+            target: { type: "string", minLength: 1, maxLength: 1000 },
           }),
         },
       }),
@@ -91,12 +112,17 @@ export const ASSISTANT_SCHEMA = object({
   },
 });
 
-function invalid(): never {
-  throw new DomainError(
-    502,
-    "Помощник вернул некорректный результат. Данные CRM не изменены.",
-    "assistant_invalid_result",
-  );
+export class AssistantResultError extends DomainError {
+  constructor(readonly field: string) {
+    super(
+      502,
+      "Не удалось собрать черновик. Предыдущий вариант сохранён в чате; его можно открыть в редакторе. Данные CRM не изменены.",
+      "assistant_invalid_result",
+    );
+  }
+}
+function invalid(field = "result"): never {
+  throw new AssistantResultError(field);
 }
 function bounded(value: unknown, max: number, required = false) {
   if (
@@ -105,7 +131,7 @@ function bounded(value: unknown, max: number, required = false) {
     (required && !value.trim())
   )
     return invalid();
-  return value.trim();
+  return redactAssistantSecrets(value.trim());
 }
 export function validateAssistantInput(input: AssistantInput) {
   if (
@@ -165,6 +191,39 @@ export function validateAssistantInput(input: AssistantInput) {
       "История чата слишком длинная. Начните новый разговор.",
       "assistant_invalid_input",
     );
+  if (
+    input.draft !== undefined &&
+    (!input.draft ||
+      typeof input.draft !== "object" ||
+      Array.isArray(input.draft) ||
+      Buffer.byteLength(JSON.stringify(input.draft), "utf8") > 20000)
+  )
+    throw new DomainError(
+      400,
+      "Текущий черновик слишком большой или повреждён. Откройте его в редакторе.",
+      "assistant_invalid_draft",
+    );
+  if (
+    input.draft &&
+    (!Array.isArray(input.draft.mediaIds) ||
+      input.draft.mediaIds.length > 10 ||
+      !Array.isArray(input.draft.buttons) ||
+      input.draft.buttons.length > 5)
+  )
+    throw new DomainError(
+      400,
+      "Некорректные файлы или кнопки в черновике.",
+      "assistant_invalid_draft",
+    );
+  if (
+    input.continueKeyword !== undefined &&
+    typeof input.continueKeyword !== "boolean"
+  )
+    throw new DomainError(
+      400,
+      "Некорректное продолжение черновика.",
+      "assistant_invalid_input",
+    );
   return input;
 }
 
@@ -186,9 +245,16 @@ export function parseAssistantResult(
   const value = raw as Record<string, unknown>;
   const result: Omit<AssistantResult, "usage"> = {
     requestId,
-    text: redactAssistantSecrets(bounded(value.text, 6000, true)),
+    text: bounded(
+      (value.text == null || value.text === "") &&
+        (value.keyword || value.reply || value.task)
+        ? "Черновик готов. Проверьте его в редакторе."
+        : value.text,
+      6000,
+      true,
+    ),
   };
-  if (value.navigateTo != null) {
+  if (value.navigateTo != null && value.navigateTo !== "") {
     if (!ASSISTANT_SECTIONS.includes(value.navigateTo as AssistantSection))
       return invalid();
     result.navigateTo = value.navigateTo as AssistantSection;
@@ -219,14 +285,14 @@ export function parseAssistantResult(
       const item = context.media.find(
         (m) => Number.isSafeInteger(id) && m.id === id && m.ready,
       );
-      if (!item) return invalid();
+      if (!item) return invalid("keyword.mediaIds");
       return item;
     });
     if (
       new Set(media.map((m) => m.id)).size !== media.length ||
       (!text && !media.length)
     )
-      return invalid();
+      return invalid("keyword.content");
     const buttons = draft.buttons.map((item, index) => {
       if (!item || typeof item !== "object") return invalid();
       const label = bounded(item.label, 40, true),
@@ -237,10 +303,10 @@ export function parseAssistantResult(
         try {
           url = new URL(target);
         } catch {
-          return invalid();
+          return invalid("keyword.buttons.target");
         }
         if (url.protocol !== "https:" || url.username || url.password)
-          return invalid();
+          return invalid("keyword.buttons.target");
       }
       return {
         label,
@@ -315,4 +381,38 @@ export function parseAssistantResult(
     };
   }
   return result;
+}
+
+// The browser owns an editable draft, not authority over bots or media. Reuse the
+// same validator and server-resolved ready media before passing it to the model.
+export function validatedAssistantDraft(
+  draft: AssistantKeywordDraft | undefined,
+  context: AssistantContext,
+): AssistantKeywordDraft | undefined {
+  if (!draft) return undefined;
+  try {
+    parseAssistantResult(
+      { text: "Текущий черновик", keyword: draft },
+      context,
+      "draft",
+    );
+  } catch {
+    throw new DomainError(
+      400,
+      "В текущем черновике есть недоступные файлы или некорректные поля. Проверьте его в редакторе.",
+      "assistant_invalid_draft",
+    );
+  }
+  return {
+    name: redactAssistantSecrets(draft.name.trim()),
+    phrase: redactAssistantSecrets(draft.phrase.trim()),
+    matchMode: draft.matchMode,
+    text: redactAssistantSecrets(draft.text.trim()),
+    mediaIds: [...draft.mediaIds],
+    buttons: draft.buttons.map((b) => ({
+      label: b.label.trim(),
+      action: b.action,
+      target: b.target.trim(),
+    })),
+  };
 }

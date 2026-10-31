@@ -8,8 +8,9 @@ export interface ApiServiceToken { id: string; name: string; tokenPrefix: string
 export interface ApiTeam { id: string; name: string; createdAt: string; members: Array<{ userId: string; displayName: string; email: string }>; }
 export interface ApiAssistantSettings {available:boolean;enabled:boolean;provider:'openai'|'compatible';hasKey:boolean;monthlyBudgetUsd:number;dailyUserLimit:number;monthSpentUsd:number;userRequestsToday:number;providers:Array<{id:'openai'|'compatible';model:string;inputPrice:number;outputPrice:number}>;}
 export interface ApiAssistantSettingsInput {enabled:boolean;provider:'openai'|'compatible';monthlyBudgetUsd:number;dailyUserLimit:number;apiKey?:string;clearKey?:boolean;}
-export interface ApiAssistantResult {requestId:string;text:string;navigateTo?:string;keywordDraft?:{botSlug:string;input:ApiKeywordReplyInput};replyDraft?:{conversationId:string;text:string};taskDraft?:{contactId:string;title:string;dueAt?:string};usage:{inputTokens:number;outputTokens:number;costUsd:number};}
-export interface ApiAssistantInput {requestId:string;message:string;section:string;botSlug?:string;conversationId?:string;includeConversation?:boolean;history?:Array<{role:'user'|'assistant';text:string}>;}
+export interface ApiAssistantKeywordDraft {name:string;phrase:string;matchMode:NonNullable<ApiKeywordReplyInput['matchMode']>;text:string;mediaIds:number[];buttons:Array<{label:string;action:'text'|'open_link';target:string}>;}
+export interface ApiAssistantResult {requestId:string;text:string;origin?:'knowledge'|'model'|'local';clarification?:'phrase'|'link'|'media';navigateTo?:string;keywordDraft?:{botSlug:string;input:ApiKeywordReplyInput};replyDraft?:{conversationId:string;text:string};taskDraft?:{contactId:string;title:string;dueAt?:string};usage:{inputTokens:number;outputTokens:number;costUsd:number};}
+export interface ApiAssistantInput {requestId:string;message:string;section:string;botSlug?:string;conversationId?:string;includeConversation?:boolean;history?:Array<{role:'user'|'assistant';text:string}>;draft?:ApiAssistantKeywordDraft;continueKeyword?:boolean;}
 
 export interface ApiContact {
   id: string;

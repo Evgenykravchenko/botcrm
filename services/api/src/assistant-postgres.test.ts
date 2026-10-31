@@ -141,6 +141,37 @@ test("assistant budget reservations are atomic, scoped and idempotent in Postgre
       [workspace],
     );
     assert.ok(!JSON.stringify(audit.rows).includes("synthetic-api-key-value"));
+    await store.save(workspace, user, {
+      enabled: true,
+      provider: "openai",
+      monthlyBudgetUsd: 0.1,
+      dailyUserLimit: 10,
+    });
+    const malformed = randomUUID();
+    await store.reserve(
+      workspace,
+      user,
+      malformed,
+      "malformed",
+      "fixture",
+      await store.settings(workspace),
+      30000,
+    );
+    await store.fail(workspace, malformed, {
+      cost: 80,
+      inputTokens: 500,
+      outputTokens: 60,
+    });
+    const failed = (
+      await pool.query(
+        "select status,cost_micros,input_tokens,output_tokens from assistant_requests where workspace_id=$1 and request_id=$2",
+        [workspace, malformed],
+      )
+    ).rows[0];
+    assert.equal(failed.status, "failed");
+    assert.equal(Number(failed.cost_micros), 80);
+    assert.equal(failed.input_tokens, 500);
+    assert.equal(failed.output_tokens, 60);
   } finally {
     await pool.query("delete from workspaces where id in ($1,$2)", [
       workspace,

@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { ApiError, apiRetryAt, botcrmApi, setAuthToken, subscribeToApiRateLimit, subscribeToRealtime } from "../app/api-client.js";
+import { assistantDraft,assistantHistory } from "../app/assistant-state.js";
 
 const originalFetch = globalThis.fetch;
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const storage = new Map<string, string>();
+test("assistant retains a separate editable draft and sends bounded history",()=>{
+  const result:any={keywordDraft:{input:{phrase:"привет",matchMode:"exact",response:{name:"Приветствие",blocks:[{kind:"text",body:"Здравствуйте"},{kind:"photo",mediaId:7}],buttons:[{label:"Google",action:"open_link",target:"https://google.com"}]}}}};
+  const draft=assistantDraft(result)!;
+  assert.equal(draft.phrase,"привет");assert.deepEqual(draft.mediaIds,[7]);assert.equal(draft.buttons[0].target,"https://google.com");
+  const history=assistantHistory([...Array.from({length:30},()=>({role:"user" as const,text:"x".repeat(1500)})),{role:"assistant",text:"error",failed:true},{role:"assistant",text:"big local guide",result:{origin:"knowledge"} as any}]);
+  assert.equal(history.length,6);assert.ok(history.every(t=>t.text.length<=700));
+  assert.equal(draft.phrase,"привет");
+});
 beforeEach(() => {
   storage.clear();
   Object.defineProperty(globalThis, "window", { configurable: true, value: {

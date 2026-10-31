@@ -18,6 +18,7 @@ import { AttributeDefinitionInput } from "./attribute-definition.js";
 import { parseWebhookChallenge } from "./input-normalization.js";
 import { ContentMediaInput, ContentPlatformService, KeywordReplyInput } from "./content-platform.js";
 import { AssistantService } from "./assistant.js";
+import { routeAssistantRequest } from "./assistant-routing.js";
 import { AssistantContext, AssistantInput, validateAssistantInput } from "./assistant-contract.js";
 import { AssistantSettingsInput } from "./assistant-store.js";
 
@@ -219,7 +220,7 @@ export class SystemController {
   constructor(@Inject(BotCrmService) private readonly core: BotCrmService, @Inject(CampaignQueueService) private readonly queue: CampaignQueueService) {}
   @Get("health")
   @PublicRoute()
-  async health() { return { status: "ok", service: "botcrm-api", version: "0.8.0", storage: this.core.storageMode(), database: await this.core.health(), queue: this.queue.status(), time: new Date().toISOString() }; }
+  async health() { return { status: "ok", service: "botcrm-api", version: "0.8.1", storage: this.core.storageMode(), database: await this.core.health(), queue: this.queue.status(), time: new Date().toISOString() }; }
 
   @Get("health/ready")
   @PublicRoute()
@@ -959,6 +960,7 @@ export class AssistantController {
   async chat(@Req() request:{auth?:AuthPrincipal},@Body() input:AssistantInput) {
     const principal=this.principal(request);
     validateAssistantInput(input);
+    const assistantRoute=routeAssistantRequest(input);
     const context:AssistantContext={canManageContent:['OWNER','ADMIN','SUPERVISOR'].includes(principal.role),media:[]};
     if(input.botSlug) {
       const profiles:any[]=await this.core.listContentProfiles(principal.workspaceId);
@@ -966,7 +968,7 @@ export class AssistantController {
       if(!profile)throw new DomainError(404,'Этот бот недоступен в вашем рабочем пространстве.','content_bot_not_found');
       this.content.registerBindings(principal.workspaceId,profiles);
       context.botSlug=profile.botSlug;context.botName=String(profile.label).slice(0,120);
-      context.media=(await this.content.listMedia(principal.workspaceId,input.botSlug)).slice(0,50).map((m:any)=>({id:m.id,name:String(m.name).slice(0,120),kind:m.kind,ready:m.canAttach===true}));
+      if("action" in assistantRoute && assistantRoute.action==="keyword")context.media=(await this.content.listMedia(principal.workspaceId,input.botSlug)).filter((m:any,index:number)=>index<50 || input.draft?.mediaIds?.includes(m.id)).map((m:any)=>({id:m.id,name:String(m.name).slice(0,120),kind:m.kind,ready:m.canAttach===true}));
     }
     if(input.includeConversation && input.conversationId) {
       const conversation:any=await this.core.getConversation(input.conversationId,principal.workspaceId);

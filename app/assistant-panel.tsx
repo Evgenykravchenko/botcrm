@@ -16,6 +16,7 @@ import {
 import {
   ApiAssistantResult,
   ApiAssistantSettings,
+  ApiAssistantKeywordDraft,
   ApiContentBot,
   ApiContentMedia,
   ApiError,
@@ -25,6 +26,7 @@ import {
 } from "./api-client";
 import { AppSelect } from "./ui/app-select";
 import { RuleEditor } from "./keyword-replies-view";
+import { assistantDraft, assistantHistory } from "./assistant-state";
 
 type Props = {
   user: ApiUser;
@@ -42,6 +44,7 @@ type Turn = {
   role: "user" | "assistant";
   text: string;
   result?: ApiAssistantResult;
+  failed?: boolean;
 };
 const errorMessage = (error: unknown) =>
   error instanceof ApiError
@@ -66,6 +69,11 @@ export function AssistantPanel(props: Props) {
   const [bots, setBots] = useState<ApiContentBot[]>([]),
     [botSlug, setBotSlug] = useState(props.botSlug || "");
   const [includeConversation, setIncludeConversation] = useState(false);
+  const [activeDraft, setActiveDraft] = useState<{
+    botSlug: string;
+    draft: ApiAssistantKeywordDraft;
+  } | null>(null);
+  const [continueKeyword, setContinueKeyword] = useState(false);
   const [editor, setEditor] = useState<{
     id: string;
     botSlug: string;
@@ -98,6 +106,8 @@ export function AssistantPanel(props: Props) {
     setSettings(null);
     setOpen(false);
     setIncludeConversation(false);
+    setActiveDraft(null);
+    setContinueKeyword(false);
   }, [identity]);
   useEffect(() => {
     if (props.botSlug) setBotSlug(props.botSlug);
@@ -107,6 +117,8 @@ export function AssistantPanel(props: Props) {
     setTurns([]);
     setError("");
     setApplied([]);
+    setActiveDraft(null);
+    setContinueKeyword(false);
   }, [contextKey]);
   useEffect(() => {
     if (!open) return;
@@ -159,9 +171,7 @@ export function AssistantPanel(props: Props) {
     const text = message.trim(),
       requestId = crypto.randomUUID(),
       requestContext = contextRef.current;
-    const history = turns
-      .slice(-6)
-      .map((t) => ({ role: t.role, text: t.text.slice(0, 2000) }));
+    const history = assistantHistory(turns);
     setTurns((current) => [
       ...current.slice(-19),
       { id: requestId, role: "user", text },
@@ -177,8 +187,12 @@ export function AssistantPanel(props: Props) {
           ? { conversationId: props.conversation.id, includeConversation: true }
           : {}),
         history,
+        ...(activeDraft?.botSlug === botSlug
+          ? { draft: activeDraft.draft }
+          : {}),
+        ...(continueKeyword ? { continueKeyword: true } : {}),
       });
-      if (contextRef.current === requestContext)
+      if (contextRef.current === requestContext) {
         setTurns((current) => [
           ...current,
           {
@@ -188,12 +202,34 @@ export function AssistantPanel(props: Props) {
             result,
           },
         ]);
-      setSettings(await botcrmApi.assistantSettings());
-    } catch (e) {
-      setError(errorMessage(e));
+        const draft = assistantDraft(result);
+        if (draft && result.keywordDraft)
+          setActiveDraft({ botSlug: result.keywordDraft.botSlug, draft });
+        if (result.origin !== "knowledge")
+          setContinueKeyword(Boolean(result.clarification));
+      }
       void botcrmApi
         .assistantSettings()
-        .then(setSettings)
+        .then((value) => {
+          if (contextRef.current === requestContext) setSettings(value);
+        })
+        .catch(() => undefined);
+    } catch (e) {
+      if (contextRef.current === requestContext)
+        setTurns((current) => [
+          ...current,
+          {
+            id: requestId + "-error",
+            role: "assistant",
+            text: errorMessage(e),
+            failed: true,
+          },
+        ]);
+      void botcrmApi
+        .assistantSettings()
+        .then((value) => {
+          if (contextRef.current === requestContext) setSettings(value);
+        })
         .catch(() => undefined);
     } finally {
       requestLock.current = false;
@@ -392,7 +428,7 @@ export function AssistantPanel(props: Props) {
                 {turns.map((turn) => (
                   <article
                     key={turn.id}
-                    className={`assistant-turn ${turn.role}`}
+                    className={`assistant-turn ${turn.role}${turn.failed ? " assistant-turn-failed" : ""}`}
                   >
                     <small>{turn.role === "user" ? "Вы" : "Помощник"}</small>
                     <p>{turn.text}</p>
@@ -424,14 +460,29 @@ export function AssistantPanel(props: Props) {
                               }
                             </p>
                             <small>
+                              Файлы:{" "}
                               {turn.result.keywordDraft.input.response.blocks?.filter(
                                 (b) => b.kind !== "text",
                               ).length || 0}{" "}
-                              файлов ·{" "}
+                              · Кнопки:{" "}
                               {turn.result.keywordDraft.input.response.buttons
-                                ?.length || 0}{" "}
-                              кнопок
+                                ?.length || 0}
                             </small>
+                            {!!turn.result.keywordDraft.input.response.buttons
+                              ?.length && (
+                              <div className="assistant-draft-buttons">
+                                {turn.result.keywordDraft.input.response.buttons.map(
+                                  (button, index) => (
+                                    <span key={index}>
+                                      {button.label} ·{" "}
+                                      {button.action === "open_link"
+                                        ? button.target
+                                        : `команда «${button.target}»`}
+                                    </span>
+                                  ),
+                                )}
+                              </div>
+                            )}
                             <button
                               className="button primary"
                               disabled={applied.includes(turn.result.requestId)}
@@ -475,7 +526,11 @@ export function AssistantPanel(props: Props) {
                           />
                         )}
                         <small className="assistant-turn-cost">
-                          Оценка запроса: {money(turn.result.usage.costUsd)}
+                          {turn.result.origin === "knowledge"
+                            ? "Справка по платформе · без расхода токенов"
+                            : turn.result.origin === "local"
+                              ? "Черновик обновлён · без расхода токенов"
+                              : `Оценка запроса: ${money(turn.result.usage.costUsd)}`}
                         </small>
                       </div>
                     )}
@@ -518,6 +573,8 @@ export function AssistantPanel(props: Props) {
                       onClick={() => {
                         setTurns([]);
                         setError("");
+                        setActiveDraft(null);
+                        setContinueKeyword(false);
                       }}
                     >
                       Новый чат
