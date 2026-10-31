@@ -90,6 +90,19 @@ test("failed reads are released and session changes never reuse another session'
   assert.equal(calls, 3); release!(); await old;
 });
 
+test("assistant budget exhaustion neither blocks CRM reads nor repeats a paid request", async () => {
+  let calls=0;
+  globalThis.fetch=(async(input)=>{
+    calls++;
+    return String(input).endsWith('/assistant/chat')?Response.json({error:{code:'assistant_budget_exceeded',message:'Бюджет помощника исчерпан'}},{status:402}):Response.json([]);
+  }) as typeof fetch;
+  await assert.rejects(botcrmApi.askAssistant({requestId:'synthetic-request',message:'Помоги',section:'inbox'}),(error:unknown)=>error instanceof ApiError&&error.code==='assistant_budget_exceeded');
+  assert.equal(calls,1);
+  assert.equal(apiRetryAt(),0);
+  await botcrmApi.contacts();
+  assert.equal(calls,2);
+});
+
 test("realtime honors Retry-After instead of reconnecting every second", async (context) => {
   context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.UTC(2026, 9, 29) });
   let calls = 0; const states: string[] = [];

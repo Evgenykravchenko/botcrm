@@ -17,6 +17,9 @@ import { ContentMediaProgressService } from "./content-media-progress.js";
 import { AttributeDefinitionInput } from "./attribute-definition.js";
 import { parseWebhookChallenge } from "./input-normalization.js";
 import { ContentMediaInput, ContentPlatformService, KeywordReplyInput } from "./content-platform.js";
+import { AssistantService } from "./assistant.js";
+import { AssistantContext, AssistantInput, validateAssistantInput } from "./assistant-contract.js";
+import { AssistantSettingsInput } from "./assistant-store.js";
 
 @Injectable()
 export class BotCrmService implements OnModuleInit, OnModuleDestroy {
@@ -216,7 +219,7 @@ export class SystemController {
   constructor(@Inject(BotCrmService) private readonly core: BotCrmService, @Inject(CampaignQueueService) private readonly queue: CampaignQueueService) {}
   @Get("health")
   @PublicRoute()
-  async health() { return { status: "ok", service: "botcrm-api", version: "0.4.3", storage: this.core.storageMode(), database: await this.core.health(), queue: this.queue.status(), time: new Date().toISOString() }; }
+  async health() { return { status: "ok", service: "botcrm-api", version: "0.8.0", storage: this.core.storageMode(), database: await this.core.health(), queue: this.queue.status(), time: new Date().toISOString() }; }
 
   @Get("health/ready")
   @PublicRoute()
@@ -935,5 +938,43 @@ export class BotContentRuntimeController {
   }
 }
 
-@Module({ controllers: [SystemController, RealtimeController, AuthController, AdminController, ApiController, KeywordRepliesController, BotContentRuntimeController], providers: [BotCrmService, CampaignQueueService, RealtimeService, ContentMediaProgressService, AuthService, ContentPlatformService, RateLimitGuard, AuthGuard, { provide: APP_GUARD, useExisting: RateLimitGuard }, { provide: APP_GUARD, useExisting: AuthGuard }] })
+@Controller('assistant')
+@ApiTags('AI assistant')
+@Roles('OWNER','ADMIN','SUPERVISOR','OPERATOR')
+export class AssistantController {
+  constructor(@Inject(AssistantService) private readonly assistant:AssistantService,@Inject(BotCrmService) private readonly core:BotCrmService,@Inject(ContentPlatformService) private readonly content:ContentPlatformService) {}
+  private principal(request:{auth?:AuthPrincipal}) {
+    if(!request.auth || request.auth.service)throw new DomainError(401,'Войдите в BotCRM под учётной записью пользователя.','authentication_required');
+    return request.auth;
+  }
+  @Get('settings')
+  @Header('Cache-Control','no-store')
+  status(@Req() request:{auth?:AuthPrincipal}) {return this.assistant.status(this.principal(request));}
+  @Patch('settings')
+  @Header('Cache-Control','no-store')
+  @Roles('OWNER','ADMIN')
+  save(@Req() request:{auth?:AuthPrincipal},@Body() input:AssistantSettingsInput) {return this.assistant.save(this.principal(request),input);}
+  @Post('chat')
+  @Header('Cache-Control','no-store')
+  async chat(@Req() request:{auth?:AuthPrincipal},@Body() input:AssistantInput) {
+    const principal=this.principal(request);
+    validateAssistantInput(input);
+    const context:AssistantContext={canManageContent:['OWNER','ADMIN','SUPERVISOR'].includes(principal.role),media:[]};
+    if(input.botSlug) {
+      const profiles:any[]=await this.core.listContentProfiles(principal.workspaceId);
+      const profile=profiles.find(p=>p.botSlug===input.botSlug);
+      if(!profile)throw new DomainError(404,'Этот бот недоступен в вашем рабочем пространстве.','content_bot_not_found');
+      this.content.registerBindings(principal.workspaceId,profiles);
+      context.botSlug=profile.botSlug;context.botName=String(profile.label).slice(0,120);
+      context.media=(await this.content.listMedia(principal.workspaceId,input.botSlug)).slice(0,50).map((m:any)=>({id:m.id,name:String(m.name).slice(0,120),kind:m.kind,ready:m.canAttach===true}));
+    }
+    if(input.includeConversation && input.conversationId) {
+      const conversation:any=await this.core.getConversation(input.conversationId,principal.workspaceId);
+      context.conversation={id:conversation.id,contactId:conversation.contactId,name:String(conversation.contact?.displayName??'Контакт').slice(0,100),messages:conversation.messages.slice(-12).map((m:any)=>({direction:String(m.direction),text:String(m.text).slice(0,700)}))};
+    }
+    return this.assistant.chat(principal,input,context);
+  }
+}
+
+@Module({ controllers: [SystemController, RealtimeController, AuthController, AdminController, ApiController, KeywordRepliesController, BotContentRuntimeController, AssistantController], providers: [BotCrmService, CampaignQueueService, RealtimeService, ContentMediaProgressService, AuthService, ContentPlatformService, AssistantService, RateLimitGuard, AuthGuard, { provide: APP_GUARD, useExisting: RateLimitGuard }, { provide: APP_GUARD, useExisting: AuthGuard }] })
 export class AppModule {}
