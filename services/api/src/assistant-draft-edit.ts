@@ -10,8 +10,8 @@ export function editAssistantDraft(
   // A compound request must reach composition; editing only its button would
   // silently discard a requested change to the answer itself.
   if (
-    /автоответ|на слово|на фразу|(?:текст|фото|видео|файл|картин|медиа|сообщени|фраз)[а-я]*/.test(
-      q.replace(/(?:текстом|текст)\s+[«"“][^»"”]+[»"”]/g, ""),
+    /автоответ|на слово|на фразу|текст|фото|видео|файл|картин|медиа|сообщени|фраз/.test(
+      q,
     )
   )
     return undefined;
