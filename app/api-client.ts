@@ -6,6 +6,10 @@ export interface ApiSession { id: string; userAgent?: string; ipAddress?: string
 export interface ApiAdminUser { userId: string; email: string; displayName: string; role: Exclude<ApiUserRole, "SERVICE">; disabledAt?: string; lastLoginAt?: string; createdAt: string; mfaEnabled: boolean; }
 export interface ApiServiceToken { id: string; name: string; tokenPrefix: string; createdAt: string; lastUsedAt?: string; expiresAt?: string; revokedAt?: string; token?: string; }
 export interface ApiTeam { id: string; name: string; createdAt: string; members: Array<{ userId: string; displayName: string; email: string }>; }
+export interface ApiAssistantSettings {available:boolean;enabled:boolean;provider:'openai'|'compatible';hasKey:boolean;monthlyBudgetUsd:number;dailyUserLimit:number;monthSpentUsd:number;userRequestsToday:number;providers:Array<{id:'openai'|'compatible';model:string;inputPrice:number;outputPrice:number}>;}
+export interface ApiAssistantSettingsInput {enabled:boolean;provider:'openai'|'compatible';monthlyBudgetUsd:number;dailyUserLimit:number;apiKey?:string;clearKey?:boolean;}
+export interface ApiAssistantResult {requestId:string;text:string;navigateTo?:string;keywordDraft?:{botSlug:string;input:ApiKeywordReplyInput};replyDraft?:{conversationId:string;text:string};taskDraft?:{contactId:string;title:string;dueAt?:string};usage:{inputTokens:number;outputTokens:number;costUsd:number};}
+export interface ApiAssistantInput {requestId:string;message:string;section:string;botSlug?:string;conversationId?:string;includeConversation?:boolean;history?:Array<{role:'user'|'assistant';text:string}>;}
 
 export interface ApiContact {
   id: string;
@@ -424,6 +428,9 @@ export function subscribeToRealtime(onEvent: (event: ApiRealtimeEvent) => void, 
   };
 }
 export const botcrmApi = {
+  assistantSettings: () => request<ApiAssistantSettings>('/assistant/settings'),
+  saveAssistantSettings: (input:ApiAssistantSettingsInput) => request<ApiAssistantSettings>('/assistant/settings',{method:'PATCH',body:JSON.stringify(input)}),
+  askAssistant: (input:ApiAssistantInput) => request<ApiAssistantResult>('/assistant/chat',{method:'POST',body:JSON.stringify(input)},60_000),
   login: (input: { workspace?: string; email: string; password: string; totp?: string }) => request<{ token: string; expiresAt: string; user: ApiUser }>("/auth/login", { method: "POST", body: JSON.stringify(input) }),
   me: () => request<ApiUser>("/auth/me"),
   logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST", body: JSON.stringify({}) }),

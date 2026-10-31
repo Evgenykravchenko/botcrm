@@ -9,6 +9,7 @@ import { CampaignMedia, CampaignRichContent, validateCampaignRichContent } from 
 import { CampaignSchedulePicker, campaignTimeZoneLabel, defaultCampaignSchedule } from "./ui/campaign-schedule-picker";
 import { isDarkTheme, isThemeName, ThemePicker, type ThemeName } from "./ui/theme-picker";
 import { KeywordRepliesView } from "./keyword-replies-view";
+import { AssistantPanel } from "./assistant-panel";
 import { botcrmApi, ApiAdminUser, ApiAnalytics, ApiAttachment, ApiAttributeDefinition, ApiAutomationInput, ApiAutomationRule, ApiAutomationRun, ApiAutomationTrigger, ApiCampaign, ApiCampaignButton, ApiCampaignRecipient, ApiContact, ApiConnector, ApiConnectorInput, ApiConversation, ApiDeal, ApiError, ApiMessage, ApiPipeline, ApiSearchResult, ApiSegment, ApiSegmentCondition, ApiSegmentGroup, ApiServiceToken, ApiSession, ApiTeam, ApiUser, ApiRealtimeStatus, apiRetryAt, setAuthToken, subscribeToApiRateLimit, subscribeToRealtime } from "./api-client";
 import { AlertTriangle, ArrowUpRight, BarChart3, Bot, BookOpen, Calendar, Check, CheckCheck, ChevronDown, Circle, Columns3, Copy, Database, ExternalLink, Eye, GripVertical, Inbox, Mail, Megaphone, Menu, MessageCircle, MessageSquareReply, Mic, MoreHorizontal, Paperclip, Pause, Pencil, Phone, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, SlidersHorizontal, Smile, Tag, User, Users, Workflow, X, Zap } from "lucide-react";
 
@@ -106,6 +107,8 @@ export function BotCRM() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState("");
+  const [assistantBotSlug,setAssistantBotSlug]=useState('');
+  const [assistantRevision,setAssistantRevision]=useState(0);
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
@@ -494,7 +497,7 @@ export function BotCRM() {
       {section === "contacts" && <ContactsView canManageBulk={canSupervise} canManageAttributes={canAdmin} attributeDefinitions={attributeDefinitions} onManageAttributes={() => setAttributeManager(true)} contacts={contacts} conversations={conversations} onOpen={(contact) => { const conversationId = contact.conversationId || conversations.find((item) => item.contactId === contact.id)?.id; if (conversationId) { setSelectedId(conversationId); setSection("inbox"); } else setContactEditor(contact); }} onEdit={setContactEditor} onCreate={() => setContactEditor("new")} onSegments={() => setSegmentManager(true)} onChanged={() => loadWorkspace(true)} notify={notify} />}
       {section === "pipeline" && <PipelineView canConfigure={canSupervise} stages={stages} pipelines={pipelines} selectedPipelineId={selectedPipelineId} onSelectPipeline={switchPipeline} dragged={dragged} setDragged={setDragged} moveDeal={moveDeal} onCreate={(stageId) => setDealComposer({ stageId })} onEdit={(deal) => setDealComposer({ deal })} onConfigure={() => setPipelineSettings(true)} />}
       {section === "campaigns" && <CampaignsView canManage={canSupervise} items={campaignItems} onCreate={() => { setCampaignEditor(null); setCampaignComposer(true); }} onEdit={(campaign) => { setCampaignEditor(campaign); setCampaignComposer(true); }} onStart={startCampaign} onPause={pauseCampaign} onCancel={cancelCampaign} actionId={startingCampaignId} />}
-      {section === "keywordReplies" && <KeywordRepliesView canManage={canSupervise} canAdmin={canAdmin} mediaChange={contentMediaChange} />}
+      {section === "keywordReplies" && <KeywordRepliesView canManage={canSupervise} canAdmin={canAdmin} mediaChange={contentMediaChange} onBotChange={setAssistantBotSlug} assistantRevision={assistantRevision} />}
       {section === "automations" && <AutomationsView canManage={canSupervise} attributeDefinitions={attributeDefinitions} automations={automations} runs={automationRuns} contacts={conversations} refresh={() => loadWorkspace(true)} notify={notify} />}
       {section === "integrations" && <IntegrationsView canCheck={canSupervise} canManage={canAdmin} connectors={connectors} refresh={() => loadWorkspace(true)} notify={notify} onCreate={() => setConnectorComposer(true)} />}
       {section === "analytics" && <AnalyticsView revision={liveRevision} />}
@@ -509,6 +512,7 @@ export function BotCRM() {
     {automationComposer && canSupervise && <AutomationModal pipelines={pipelines} attributeDefinitions={attributeDefinitions} close={() => setAutomationComposer(false)} created={async () => { setAutomationComposer(false); await loadWorkspace(true); notify("Правило автоматизации создано"); }} />}
     {connectorComposer && canAdmin && <ConnectorModal close={() => setConnectorComposer(false)} created={async () => { setConnectorComposer(false); await loadWorkspace(true); notify("Подключение создано — проверьте его состояние"); }} />}
     {accountModal && currentUser && <AccountModal user={currentUser} onUserChange={setCurrentUser} close={() => setAccountModal(false)} logout={logout} notify={notify} />}
+    {currentUser&&<AssistantPanel key={currentUser.workspaceId+currentUser.userId} user={currentUser} section={section} sectionTitle={title.title} botSlug={section==='keywordReplies'?assistantBotSlug:undefined} conversation={section==='inbox'&&selected?{id:selected.id,name:selected.name}:undefined} navigate={value=>{if(navItems.some(item=>item.id===value))setSection(value as Section);}} insertReply={(id,text)=>{if(section!=='inbox'||selectedId!==id){notify('Откройте исходный диалог, чтобы вставить этот ответ.');return false;}setDraft(current=>current?current+'\n'+text:text);return true;}} ruleSaved={()=>setAssistantRevision(value=>value+1)} notify={notify}/>}
     {toast && <div className="toast"><Check size={17} />{toast}</div>}{mobileNav && <button className="sidebar-scrim" onClick={() => setMobileNav(false)} />}
   </div>;
 }

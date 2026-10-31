@@ -128,9 +128,11 @@ function ContentBotDialog({ busy, close, create }: { busy: boolean; close: () =>
   </div>;
 }
 
-export function KeywordRepliesView({ canManage, canAdmin, mediaChange }: { canManage: boolean; canAdmin: boolean; mediaChange?: { botSlug?: string; revision: number } }) {
+export function KeywordRepliesView({ canManage, canAdmin, mediaChange, onBotChange, assistantRevision=0 }: { canManage: boolean; canAdmin: boolean; mediaChange?: { botSlug?: string; revision: number }; onBotChange?: (slug:string)=>void; assistantRevision?:number }) {
   const [bots, setBots] = useState<ApiContentBot[]>([]);
   const [botSlug, setBotSlug] = useState("");
+  useEffect(()=>{onBotChange?.(botSlug);},[botSlug,onBotChange]);
+  const assistantRefreshRef=useRef(assistantRevision);
   const [rules, setRules] = useState<ApiKeywordReply[]>([]);
   const [media, setMedia] = useState<ApiContentMedia[]>([]);
   const refreshMediaRef = useRef<() => void>(() => undefined);
@@ -186,6 +188,7 @@ export function KeywordRepliesView({ canManage, canAdmin, mediaChange }: { canMa
 
   useEffect(() => { void loadBots(); }, [loadBots]);
   useEffect(() => { if (botSlug) void loadContent(botSlug); }, [botSlug, loadContent]);
+  useEffect(()=>{if(assistantRefreshRef.current!==assistantRevision){assistantRefreshRef.current=assistantRevision;if(botSlug)void loadContent(botSlug,true);}},[assistantRevision,botSlug,loadContent]);
   useEffect(() => {
     if (!retry || (retry.kind === "content" && retry.slug !== botSlug)) return;
     const timer = window.setTimeout(() => {
@@ -433,8 +436,8 @@ function PreviewMediaGallery({ items, botSlug }: { items: PreviewGalleryItem[]; 
   })}</div>{viewing?.yandexPath && <VideoPreviewDialog botSlug={botSlug} path={viewing.yandexPath} name={viewing.name} poster={viewing.previewUrl} close={() => setViewing(null)}/>}</>;
 }
 
-function RuleEditor({ initial, botSlug, media, mediaCreated, mediaRemoved, close, save }: { initial?: ApiKeywordReply; botSlug: string; media: ApiContentMedia[]; mediaCreated: (item: ApiContentMedia) => void; mediaRemoved: (item: ApiContentMedia) => Promise<boolean>; close: () => void; save: (input: ApiKeywordReplyInput) => Promise<void> }) {
-  const [draft, setDraft] = useState<ApiKeywordReplyInput>(initial ? ruleInput(initial) : emptyRule());
+export function RuleEditor({ initial, initialDraft, botSlug, media, mediaCreated, mediaRemoved, close, save }: { initial?: ApiKeywordReply; initialDraft?:ApiKeywordReplyInput; botSlug: string; media: ApiContentMedia[]; mediaCreated: (item: ApiContentMedia) => void; mediaRemoved: (item: ApiContentMedia) => Promise<boolean>; close: () => void; save: (input: ApiKeywordReplyInput) => Promise<void> }) {
+  const [draft, setDraft] = useState<ApiKeywordReplyInput>(initial ? ruleInput(initial) : initialDraft??emptyRule());
   const [availableMedia, setAvailableMedia] = useState(media);
   const [mediaSearch, setMediaSearch] = useState("");
   const [diskOpen, setDiskOpen] = useState(false);
