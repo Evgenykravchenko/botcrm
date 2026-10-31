@@ -84,7 +84,7 @@ export class AssistantStore {
         ],
       );
       await client.query(
-        "insert into audit_events(workspace_id,actor_type,actor_id,action,entity_type,entity_id,changes) values($1,'USER',$2,'assistant.settings_updated','assistant',$1,$3)",
+        "insert into audit_events(workspace_id,actor_type,actor_id,action,entity_type,entity_id,changes) values($1::uuid,'USER',$2,'assistant.settings_updated','assistant',$1::text,$3)",
         [
           workspace,
           user,
