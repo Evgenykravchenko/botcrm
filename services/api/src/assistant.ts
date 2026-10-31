@@ -1,4 +1,9 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import type { AuthPrincipal } from "./auth.js";
@@ -18,11 +23,16 @@ import {
   parseAssistantResult,
   redactAssistantSecrets,
   validateAssistantInput,
+  validatedAssistantDraft,
+  AssistantResultError,
 } from "./assistant-contract.js";
-import { ASSISTANT_GUIDE } from "./assistant-guide.js";
+import { assistantCompositionGuide } from "./assistant-guide.js";
+import { routeAssistantRequest } from "./assistant-routing.js";
+import { editAssistantDraft } from "./assistant-draft-edit.js";
 
 @Injectable()
 export class AssistantService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(AssistantService.name);
   private pool?: Pool;
   store?: AssistantStore;
   provider: AssistantProvider = new HttpAssistantProvider();
@@ -125,6 +135,80 @@ export class AssistantService implements OnModuleInit, OnModuleDestroy {
         "Администратор ещё не включил AI-помощника.",
         "assistant_disabled",
       );
+    const route = routeAssistantRequest(input);
+    if ("local" in route)
+      return {
+        ...route.local,
+        origin: "knowledge" as const,
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      };
+    if (route.action === "keyword" && !context.canManageContent)
+      throw new DomainError(
+        403,
+        "Создание автоответов недоступно вашей роли.",
+        "assistant_forbidden",
+      );
+    if (route.action !== "keyword" && !context.conversation)
+      throw new DomainError(
+        400,
+        "Выберите диалог и разрешите передачу сообщений помощнику.",
+        "assistant_conversation_required",
+      );
+    const currentDraft =
+      route.action === "keyword"
+        ? validatedAssistantDraft(input.draft, context)
+        : undefined;
+    const edited = currentDraft
+      ? editAssistantDraft(input.message, currentDraft)
+      : undefined;
+    if (edited)
+      return {
+        ...parseAssistantResult(
+          {
+            text: "Обновил черновик. Остальное содержимое сохранено; проверьте кнопки в редакторе.",
+            keyword: edited,
+          },
+          context,
+          input.requestId,
+        ),
+        origin: "local" as const,
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      };
+    if (
+      currentDraft &&
+      currentDraft.buttons.length >= 5 &&
+      /добав.{0,20}кноп/i.test(input.message)
+    )
+      return {
+        requestId: input.requestId,
+        text: "В черновике уже 5 кнопок. Уберите одну или укажите, какую заменить.",
+        origin: "local" as const,
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      };
+    const guide = assistantCompositionGuide(route.action);
+    const wantsMedia =
+      /фото|видео|медиа|файл|аудио|документ|картин|прикреп/i.test(
+        input.message,
+      );
+    const modelMedia = context.media.filter(
+      (m) => wantsMedia || currentDraft?.mediaIds.includes(m.id),
+    );
+    modelMedia.sort(
+      (a, b) =>
+        Number(currentDraft?.mediaIds.includes(b.id)) -
+          Number(currentDraft?.mediaIds.includes(a.id)) ||
+        Number(input.message.toLowerCase().includes(b.name.toLowerCase())) -
+          Number(input.message.toLowerCase().includes(a.name.toLowerCase())),
+    );
+    const modelContext =
+      route.action === "keyword"
+        ? {
+            canManageContent: context.canManageContent,
+            botSlug: context.botSlug,
+            botName: context.botName,
+            media: modelMedia.slice(0, 20),
+          }
+        : { conversation: context.conversation };
     const config = assistantProviders().find((p) => p.id === settings.provider);
     if (!config)
       throw new DomainError(
@@ -142,8 +226,11 @@ export class AssistantService implements OnModuleInit, OnModuleDestroy {
       JSON.stringify({
         request: input.message,
         section: input.section,
-        history: input.history ?? [],
-        context,
+        history: (input.history ?? [])
+          .slice(-6)
+          .map((t) => ({ role: t.role, text: t.text.slice(0, 700) })),
+        currentDraft: currentDraft ?? null,
+        context: modelContext,
         now: new Date().toISOString(),
       }),
     );
@@ -156,7 +243,7 @@ export class AssistantService implements OnModuleInit, OnModuleDestroy {
     const inputUpperBound =
       Buffer.byteLength(
         JSON.stringify({
-          system: ASSISTANT_GUIDE,
+          system: guide,
           user,
           schema: ASSISTANT_SCHEMA,
         }),
@@ -195,6 +282,9 @@ export class AssistantService implements OnModuleInit, OnModuleDestroy {
         );
       return cached;
     }
+    let knownUsage:
+      | { cost: number; inputTokens: number; outputTokens: number }
+      | undefined;
     try {
       const key = decryptSecret(settings.encryptedCredentials).apiKey;
       if (typeof key !== "string")
@@ -203,12 +293,7 @@ export class AssistantService implements OnModuleInit, OnModuleDestroy {
           "Ключ помощника недоступен. Сохраните его заново в настройках.",
           "assistant_key_required",
         );
-      const completion = await this.provider.complete(
-        config,
-        key,
-        ASSISTANT_GUIDE,
-        user,
-      );
+      const completion = await this.provider.complete(config, key, guide, user);
       if (
         completion.inputTokens > inputUpperBound ||
         completion.outputTokens > config.maxOutputTokens
@@ -224,8 +309,59 @@ export class AssistantService implements OnModuleInit, OnModuleDestroy {
         completion.outputTokens,
         completion.cacheWriteTokens,
       );
+      knownUsage = {
+        cost,
+        inputTokens: completion.inputTokens,
+        outputTokens: completion.outputTokens,
+      };
+      const raw = completion.value as Record<string, unknown> | null;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        throw new AssistantResultError("result");
+      const questions = {
+        phrase: "На какое слово или фразу должен отвечать бот?",
+        link: "Пришлите HTTPS-ссылку, которую должна открывать кнопка. Подпись я предложу сам.",
+        media:
+          "Подходящего готового файла нет. Выберите материал в медиатеке или дождитесь статуса «Готов».",
+      };
+      const clarification = raw.clarification;
+      if (
+        clarification != null &&
+        (route.action !== "keyword" ||
+          !Object.hasOwn(questions, String(clarification)))
+      )
+        throw new AssistantResultError("clarification");
+      if (clarification === "phrase" && currentDraft?.phrase)
+        throw new AssistantResultError("unnecessary_phrase_question");
+      const actionValue =
+        route.action === "summary" ? raw.text : raw[route.action];
+      if (!clarification && actionValue == null)
+        throw new AssistantResultError("missing_action");
+      const resultBody = clarification
+        ? {
+            requestId: input.requestId,
+            text: questions[clarification as keyof typeof questions],
+            clarification: clarification as "phrase" | "link" | "media",
+          }
+        : parseAssistantResult(
+            {
+              text:
+                route.action === "keyword"
+                  ? "Черновик автоответа готов. Проверьте текст, файлы и кнопки в редакторе."
+                  : route.action === "reply"
+                    ? "Подготовлен вариант ответа. Проверьте его перед отправкой."
+                    : route.action === "task"
+                      ? "Подготовлена задача. Проверьте её перед созданием."
+                      : raw.text,
+              keyword: route.action === "keyword" ? raw.keyword : null,
+              reply: route.action === "reply" ? raw.reply : null,
+              task: route.action === "task" ? raw.task : null,
+            },
+            context,
+            input.requestId,
+          );
       const result = {
-        ...parseAssistantResult(completion.value, context, input.requestId),
+        ...resultBody,
+        origin: "model" as const,
         usage: {
           inputTokens: completion.inputTokens,
           outputTokens: completion.outputTokens,
@@ -235,7 +371,13 @@ export class AssistantService implements OnModuleInit, OnModuleDestroy {
       await store.finish(principal.workspaceId, input.requestId, result, cost);
       return result;
     } catch (error) {
-      await store.fail(principal.workspaceId, input.requestId);
+      await store.fail(principal.workspaceId, input.requestId, knownUsage);
+      if (error instanceof AssistantResultError)
+        this.logger.warn({
+          event: "assistant_result_rejected",
+          requestId: input.requestId,
+          field: error.field,
+        });
       if (error instanceof DomainError) throw error;
       throw new DomainError(
         502,

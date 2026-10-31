@@ -248,11 +248,22 @@ export class AssistantStore {
       ],
     );
   }
-  async fail(workspace: string, id: string) {
-    // Retain the upper-bound reservation: a timeout does not prove the provider didn't bill it.
+  async fail(
+    workspace: string,
+    id: string,
+    usage?: { cost: number; inputTokens: number; outputTokens: number },
+  ) {
+    // A completed response with invalid content still has known billed usage.
+    // Timeouts/transport failures retain the full reservation.
     await this.pool.query(
-      "update assistant_requests set status='failed' where workspace_id=$1 and request_id=$2 and status='pending'",
-      [workspace, id],
+      "update assistant_requests set status='failed',cost_micros=coalesce($3,cost_micros),input_tokens=$4,output_tokens=$5 where workspace_id=$1 and request_id=$2 and status='pending'",
+      [
+        workspace,
+        id,
+        usage?.cost ?? null,
+        usage?.inputTokens ?? null,
+        usage?.outputTokens ?? null,
+      ],
     );
   }
 }
