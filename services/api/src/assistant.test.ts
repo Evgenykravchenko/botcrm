@@ -15,7 +15,10 @@ import {
   routeAssistantRequest,
   ASSISTANT_SCOPE_MESSAGE,
 } from "./assistant-routing.js";
-import { ASSISTANT_KNOWLEDGE } from "./assistant-knowledge.js";
+import {
+  ASSISTANT_KNOWLEDGE,
+  findAssistantArticles,
+} from "./assistant-knowledge.js";
 import { assistantCompositionGuide } from "./assistant-guide.js";
 import { editAssistantDraft } from "./assistant-draft-edit.js";
 import {
@@ -492,6 +495,12 @@ test("platform documentation and unrelated questions never invoke a provider", a
 });
 
 test("button edits and short followups use the active structured draft", () => {
+  assert.ok(
+    findAssistantArticles(
+      "Какие графики есть в аналитике и что означает конверсия?",
+      "keywordReplies",
+    ).some((a) => a.id === "analytics-calculation"),
+  );
   const draft = completion().keyword;
   for (const message of [
     "На слово привет отвечай Здравствуйте",
