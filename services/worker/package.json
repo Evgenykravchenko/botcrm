@@ -10,8 +10,8 @@
     "test": "node --import tsx --test src/worker.test.ts src/message-worker.test.ts src/bot-event-worker.test.ts src/retention.test.ts src/telegram-media.test.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1156.0",
-    "@aws-sdk/s3-request-presigner": "^3.1156.0",
+    "@aws-sdk/client-s3": "^3.1159.0",
+    "@aws-sdk/s3-request-presigner": "^3.1159.0",
     "bullmq": "^5.81.5",
     "dotenv": "^17.4.2",
     "pg": "^8.23.1",
